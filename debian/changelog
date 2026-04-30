@@ -1,3 +1,9 @@
+alsa-lib (1.2.8-1pop2) jammy; urgency=medium
+
+  * Trigger rebuild for arm packages
+
+ -- Jeremy Soller <jeremy@system76.com>  Thu, 30 Apr 2026 12:17:16 -0600
+
 alsa-lib (1.2.8-1pop1) jammy; urgency=medium
 
   * Pull upstream version 1.2.8
