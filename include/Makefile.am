@@ -22,19 +22,20 @@ endif
 if BUILD_PCM_PLUGIN_RATE
 alsainclude_HEADERS += pcm_rate.h
 endif
-if BUILD_PCM_PLUGIN_EXTPLUG
-alsainclude_HEADERS += pcm_external.h pcm_extplug.h
+if BUILD_PCM_PLUGIN_EXTERNAL
+# FIXME: pcm_external.h includes both pcm_extplug.h and pcm_ioplug.h
+alsainclude_HEADERS += pcm_external.h pcm_extplug.h pcm_ioplug.h
 endif
-if BUILD_PCM_PLUGIN_IOPLUG
-if !BUILD_PCM_PLUGIN_EXTPLUG
-alsainclude_HEADERS += pcm_external.h
-endif
-alsainclude_HEADERS += pcm_ioplug.h
-endif
+#if BUILD_PCM_PLUGIN_EXTPLUG
+#alsainclude_HEADERS += pcm_extplug.h
+#endif
+#if BUILD_PCM_PLUGIN_IOPLUG
+#alsainclude_HEADERS += pcm_ioplug.h
+#endif
 endif
 
 if BUILD_RAWMIDI
-alsainclude_HEADERS += rawmidi.h
+alsainclude_HEADERS += rawmidi.h ump.h ump_msg.h
 endif
 
 if BUILD_HWDEP
@@ -55,10 +56,6 @@ endif
 
 if BUILD_TOPOLOGY
 alsainclude_HEADERS += topology.h
-endif
-
-if BUILD_ALISP
-alsainclude_HEADERS += alisp.h
 endif
 
 noinst_HEADERS = alsa sys.h search.h list.h aserver.h local.h alsa-symbols.h \

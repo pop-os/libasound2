@@ -25,8 +25,14 @@
  *
  */
 
+#if !defined(__ASOUNDLIB_H) && !defined(ALSA_LIBRARY_BUILD)
+/* don't use ALSA_LIBRARY_BUILD define in sources outside alsa-lib */
+#warning "use #include <alsa/asoundlib.h>, <alsa/seq_event.h> should not be used directly"
+#include <alsa/asoundlib.h>
+#endif
+
 #ifndef __ALSA_SEQ_EVENT_H
-#define __ALSA_SEQ_EVENT_H
+#define __ALSA_SEQ_EVENT_H /**< header include loop protection */
 
 /**
  *  \defgroup SeqEvents Sequencer Event Definitions
@@ -55,7 +61,7 @@ enum snd_seq_event_type {
 	SND_SEQ_EVENT_NOTEOFF,
 	/** key pressure change (aftertouch); event data type = #snd_seq_ev_note_t */
 	SND_SEQ_EVENT_KEYPRESS,
-	
+
 	/** controller; event data type = #snd_seq_ev_ctrl_t */
 	SND_SEQ_EVENT_CONTROLLER = 10,
 	/** program change; event data type = #snd_seq_ev_ctrl_t */
@@ -81,7 +87,7 @@ enum snd_seq_event_type {
 	SND_SEQ_EVENT_TIMESIGN,
 	/** SMF Key Signature event; event data type = #snd_seq_ev_ctrl_t */
 	SND_SEQ_EVENT_KEYSIGN,
-	        
+
 	/** MIDI Real Time Start message; event data type = #snd_seq_ev_queue_control_t */
 	SND_SEQ_EVENT_START = 30,
 	/** MIDI Real Time Continue message; event data type = #snd_seq_ev_queue_control_t */
@@ -132,6 +138,11 @@ enum snd_seq_event_type {
 	SND_SEQ_EVENT_PORT_SUBSCRIBED,
 	/** Ports disconnected; event data type = #snd_seq_connect_t */
 	SND_SEQ_EVENT_PORT_UNSUBSCRIBED,
+
+	/** UMP Endpoint info has changed; event data type = #snd_seq_ev_ump_notify_t */
+	SND_SEQ_EVENT_UMP_EP_CHANGE,
+	/** UMP Block info has changed; event data type = #snd_seq_ev_ump_notify_t */
+	SND_SEQ_EVENT_UMP_BLOCK_CHANGE,
 
 	/** user-defined event; event data type = any (fixed size) */
 	SND_SEQ_EVENT_USR0 = 90,
@@ -225,6 +236,7 @@ typedef union snd_seq_timestamp {
 #define SND_SEQ_PRIORITY_HIGH		(1<<4)	/**< event should be processed before others */
 #define SND_SEQ_PRIORITY_MASK		(1<<4)	/**< mask for priority bits */
 
+#define SND_SEQ_EVENT_UMP		(1<<5)	/**< UMP packet event */
 
 /** Note event */
 typedef struct snd_seq_ev_note {
@@ -291,33 +303,57 @@ typedef struct snd_seq_ev_queue_control {
 	} param;				/**< data value union */
 } snd_seq_ev_queue_control_t;
 
+/** UMP info change notify */
+typedef struct snd_seq_ev_ump_notify {
+	unsigned char client;	/**< Client number */
+	unsigned char block;	/**< Block number (optional) */
+} snd_seq_ev_ump_notify_t;
+
+/** Sequencer event data */
+typedef union snd_seq_event_data {
+	snd_seq_ev_note_t note;		/**< note information */
+	snd_seq_ev_ctrl_t control;	/**< MIDI control information */
+	snd_seq_ev_raw8_t raw8;		/**< raw8 data */
+	snd_seq_ev_raw32_t raw32;	/**< raw32 data */
+	snd_seq_ev_ext_t ext;		/**< external data */
+	snd_seq_ev_queue_control_t queue; /**< queue control */
+	snd_seq_timestamp_t time;	/**< timestamp */
+	snd_seq_addr_t addr;		/**< address */
+	snd_seq_connect_t connect;	/**< connect information */
+	snd_seq_result_t result;	/**< operation result code */
+	snd_seq_ev_ump_notify_t ump_notify; /**< UMP info change notification */
+} snd_seq_event_data_t;
 
 /** Sequencer event */
 typedef struct snd_seq_event {
 	snd_seq_event_type_t type;	/**< event type */
 	unsigned char flags;		/**< event flags */
 	unsigned char tag;		/**< tag */
-	
+
 	unsigned char queue;		/**< schedule queue */
 	snd_seq_timestamp_t time;	/**< schedule time */
 
 	snd_seq_addr_t source;		/**< source address */
 	snd_seq_addr_t dest;		/**< destination address */
 
-	union {
-		snd_seq_ev_note_t note;		/**< note information */
-		snd_seq_ev_ctrl_t control;	/**< MIDI control information */
-		snd_seq_ev_raw8_t raw8;		/**< raw8 data */
-		snd_seq_ev_raw32_t raw32;	/**< raw32 data */
-		snd_seq_ev_ext_t ext;		/**< external data */
-		snd_seq_ev_queue_control_t queue; /**< queue control */
-		snd_seq_timestamp_t time;	/**< timestamp */
-		snd_seq_addr_t addr;		/**< address */
-		snd_seq_connect_t connect;	/**< connect information */
-		snd_seq_result_t result;	/**< operation result code */
-	} data;				/**< event data... */
+	snd_seq_event_data_t data;	/**< event data... */
 } snd_seq_event_t;
 
+/** UMP sequencer event; compatible with legacy sequencer event */
+typedef struct snd_seq_ump_event {
+	snd_seq_event_type_t type;	/**< event type */
+	unsigned char flags;		/**< event flags */
+	unsigned char tag;		/**< tag */
+	unsigned char queue;		/**< schedule queue */
+	snd_seq_timestamp_t time;	/**< schedule time */
+	snd_seq_addr_t source;		/**< source address */
+	snd_seq_addr_t dest;		/**< destination address */
+
+	union {
+		snd_seq_event_data_t data;	/**< (shared) legacy data */
+		unsigned int ump[4];		/**< UMP data bytes */
+	};
+} snd_seq_ump_event_t;
 
 /** \} */
 

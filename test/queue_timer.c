@@ -11,7 +11,7 @@ void normalize(struct timeval *tv)
     } else if (tv->tv_sec < 0) {
 	while (tv->tv_usec <= -1000000) { tv->tv_usec += 1000000; --tv->tv_sec; }
 	while (tv->tv_usec > 0) { tv->tv_usec -= 1000000; ++tv->tv_sec; }
-    } else { 
+    } else {
 	while (tv->tv_usec >= 1000000) { tv->tv_usec -= 1000000; ++tv->tv_sec; }
 	while (tv->tv_usec < 0) { tv->tv_usec += 1000000; --tv->tv_sec; }
     }
@@ -100,9 +100,9 @@ main(int argc ATTRIBUTE_UNUSED, char **argv ATTRIBUTE_UNUSED)
 	prevdiff = diff;
 
 	fprintf(stderr, " real time: %12ld sec %8ld usec\nqueue time: %12ld sec %8ld usec\n      diff: %12ld sec %8ld usec\n  diffdiff: %12ld sec %8ld usec\n",
-		tv.tv_sec, tv.tv_usec,
+		(long)tv.tv_sec, tv.tv_usec,
 		(long)rtime->tv_sec, (long)rtime->tv_nsec / 1000,
-		diff.tv_sec, diff.tv_usec,
+		(long)diff.tv_sec, diff.tv_usec,
 		(long)diffdiff.tv_sec, (long)diffdiff.tv_usec);
 
 	if (diffdiff.tv_usec >  5000 ||

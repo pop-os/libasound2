@@ -10,7 +10,7 @@
  *  Lesser General Public License for more details.
  *
  *  You should have received a copy of the GNU Lesser General Public
- *  License along with this library; if not, write to the Free Software  
+ *  License along with this library; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *  Support for the verb/device/modifier core logic and API,
@@ -165,8 +165,8 @@ static int read_tlv_file(unsigned int **res,
 			 const char *filepath)
 {
 	int err = 0;
-	int fd;
-	struct stat64 st;
+	int fd = -1;
+	struct stat64 st = { 0 };
 	size_t sz;
 	ssize_t sz_read;
 	struct snd_ctl_tlv *tlv;
@@ -174,7 +174,7 @@ static int read_tlv_file(unsigned int **res,
 	fd = open(filepath, O_RDONLY);
 	if (fd < 0) {
 		err = -errno;
-		return err;
+		goto __fail;
 	}
 	if (fstat64(fd, &st) == -1) {
 		err = -errno;
@@ -182,33 +182,36 @@ static int read_tlv_file(unsigned int **res,
 	}
 	sz = st.st_size;
 	if (sz > 16 * 1024 * 1024 || sz < 8 || sz % 4) {
-		uc_error("File size should be less than 16 MB "
-			 "and multiple of 4");
+		snd_error(UCM, "File size should be less than 16 MB "
+			       "and multiple of 4");
+
 		err = -EINVAL;
 		goto __fail;
 	}
 	*res = malloc(sz);
-	if (res == NULL) {
+	if (*res == NULL) {
 		err = -ENOMEM;
 		goto __fail;
 	}
 	sz_read = read(fd, *res, sz);
 	if (sz_read < 0 || (size_t)sz_read != sz) {
 		err = -EIO;
-		free(*res);
-		*res = NULL;
+		goto __fail_res;
 	}
 	/* Check if the tlv file specifies valid size. */
 	tlv = (struct snd_ctl_tlv *)(*res);
 	if (tlv->length + 2 * sizeof(unsigned int) != sz) {
-		uc_error("Invalid tlv size: %d", tlv->length);
+		snd_error(UCM, "Invalid tlv size: %d", tlv->length);
 		err = -EINVAL;
+__fail_res:
 		free(*res);
 		*res = NULL;
 	}
 
 __fail:
-	close(fd);
+	if (fd >= 0)
+		close(fd);
+	snd_trace(UCM, "read TLV from '%s' (size %llu)", filepath, (long long int)st.st_size);
 	return err;
 }
 
@@ -217,8 +220,8 @@ static int binary_file_parse(snd_ctl_elem_value_t *dst,
 			      const char *filepath)
 {
 	int err = 0;
-	int fd;
-	struct stat64 st;
+	int fd = -1;
+	struct stat64 st = { 0 };
 	size_t sz;
 	ssize_t sz_read;
 	char *res;
@@ -227,14 +230,14 @@ static int binary_file_parse(snd_ctl_elem_value_t *dst,
 
 	type = snd_ctl_elem_info_get_type(info);
 	if (type != SND_CTL_ELEM_TYPE_BYTES) {
-		uc_error("only support byte type!");
+		snd_error(UCM, "only support byte type!");
 		err = -EINVAL;
-		return err;
+		goto __fail;
 	}
 	fd = open(filepath, O_RDONLY);
 	if (fd < 0) {
 		err = -errno;
-		return err;
+		goto __fail;
 	}
 	if (stat64(filepath, &st) == -1) {
 		err = -errno;
@@ -243,7 +246,7 @@ static int binary_file_parse(snd_ctl_elem_value_t *dst,
 	sz = st.st_size;
 	count = snd_ctl_elem_info_get_count(info);
 	if (sz != count || sz > sizeof(dst->value.bytes)) {
-		uc_error("invalid parameter size %d!", sz);
+		snd_error(UCM, "invalid parameter size %d!", sz);
 		err = -EINVAL;
 		goto __fail;
 	}
@@ -262,7 +265,9 @@ static int binary_file_parse(snd_ctl_elem_value_t *dst,
       __fail_read:
 	free(res);
       __fail:
-	close(fd);
+	if (fd >= 0)
+		close(fd);
+	snd_trace(UCM, "read binary data from '%s' (size %llu)", filepath, (long long int)st.st_size);
 	return err;
 }
 
@@ -304,11 +309,11 @@ static const char *parse_uint(const char *p, const char *prefix, size_t len,
 	p += len;
 	v = strtol(p, &end, 0);
 	if (*end != '\0' && *end != ' ' && *end != ',') {
-		uc_error("unable to parse '%s'", prefix);
+		snd_error(UCM, "unable to parse '%s'", prefix);
 		return NULL;
 	}
 	if ((unsigned int)v < min || (unsigned int)v > max) {
-		uc_error("value '%s' out of range %u-%u %(%ld)", min, max, v);
+		snd_error(UCM, "value '%s' out of range %u-%u %(%ld)", min, max, v);
 		return NULL;
 	}
 	*rval = v;
@@ -395,7 +400,7 @@ next:
 	*pos = p;
 	return 0;
 er:
-	uc_error("unknown syntax '%s'", p);
+	snd_error(UCM, "unknown syntax '%s'", p);
 	return -EINVAL;
 }
 
@@ -407,6 +412,8 @@ static int execute_cset(snd_ctl_t *ctl, const char *cset, unsigned int type)
 	snd_ctl_elem_value_t *value;
 	snd_ctl_elem_info_t *info, *info2 = NULL;
 	unsigned int *res = NULL;
+
+	snd_trace(UCM, "execute cset [%d] '%s'", type, cset);
 
 	snd_ctl_elem_id_malloc(&id);
 	snd_ctl_elem_value_malloc(&value);
@@ -422,7 +429,7 @@ static int execute_cset(snd_ctl_t *ctl, const char *cset, unsigned int type)
 		snd_ctl_elem_info_set_id(info2, id);
 		err = parse_cset_new_info(info2, pos, &pos);
 		if (err < 0 || !*pos) {
-			uc_error("undefined or wrong id config for cset-new", cset);
+			snd_error(UCM, "undefined or wrong id config for cset-new", cset);
 			err = -EINVAL;
 			goto __fail;
 		}
@@ -431,12 +438,12 @@ static int execute_cset(snd_ctl_t *ctl, const char *cset, unsigned int type)
 	}
 	if (!*pos) {
 		if (type != SEQUENCE_ELEMENT_TYPE_CTL_REMOVE) {
-			uc_error("undefined value for cset >%s<", cset);
+			snd_error(UCM, "undefined value for cset >%s<", cset);
 			err = -EINVAL;
 			goto __fail;
 		}
 	} else if (type == SEQUENCE_ELEMENT_TYPE_CTL_REMOVE) {
-		uc_error("extra value for ctl-remove >%s<", cset);
+		snd_error(UCM, "extra value for ctl-remove >%s<", cset);
 		err = -EINVAL;
 		goto __fail;
 	}
@@ -448,7 +455,7 @@ static int execute_cset(snd_ctl_t *ctl, const char *cset, unsigned int type)
 		if (err >= 0) {
 			err = snd_ctl_elem_remove(ctl, id);
 			if (err < 0) {
-				uc_error("unable to remove control");
+				snd_error(UCM, "unable to remove control");
 				err = -EINVAL;
 				goto __fail;
 			}
@@ -457,7 +464,7 @@ static int execute_cset(snd_ctl_t *ctl, const char *cset, unsigned int type)
 			goto __ok;
 		err = __snd_ctl_add_elem_set(ctl, info2, info2->owner, info2->count);
 		if (err < 0) {
-			uc_error("unable to create new control");
+			snd_error(UCM, "unable to create new control");
 			goto __fail;
 		}
 		/* new id copy */
@@ -507,7 +514,7 @@ static int execute_cset(snd_ctl_t *ctl, const char *cset, unsigned int type)
 	free(value);
 	if (info2) {
 		if (info2->type == SND_CTL_ELEM_TYPE_ENUMERATED)
-			free((void *)info2->value.enumerated.names_ptr);
+			free((void *)(size_t)info2->value.enumerated.names_ptr);
 		free(info2);
 	}
 	free(info);
@@ -525,6 +532,8 @@ static int execute_sysw(const char *sysw)
 	size_t len;
 	int fd, myerrno;
 	bool ignore_error = false;
+
+	snd_trace(UCM, "execute sysw '%s'", sysw);
 
 	if (sysw == NULL || *sysw == '\0')
 		return 0;
@@ -566,22 +575,24 @@ static int execute_sysw(const char *sysw)
 		free(s);
 		if (ignore_error)
 			return 0;
-		uc_error("unable to open '%s' for write", path);
+		snd_error(UCM, "unable to open '%s' for write", path);
 		return -EINVAL;
 	}
 	wlen = write(fd, value, len);
 	myerrno = errno;
 	close(fd);
-	free(s);
 
 	if (ignore_error)
-		return 0;
+		goto __end;
 
 	if (wlen != (ssize_t)len) {
-		uc_error("unable to write '%s' to '%s': %s", value, path, strerror(myerrno));
+		snd_error(UCM, "unable to write '%s' to '%s': %s", value, path, strerror(myerrno));
+		free(s);
 		return -EINVAL;
 	}
 
+__end:
+	free(s);
 	return 0;
 }
 
@@ -595,6 +606,8 @@ static int execute_cfgsave(snd_use_case_mgr_t *uc_mgr, const char *filename)
 	bool with_root = false;
 	int err = 0;
 
+	snd_trace(UCM, "execute cfgsave to '%s'", filename);
+
 	file = strdup(filename);
 	if (!file)
 		return -ENOMEM;
@@ -607,14 +620,14 @@ static int execute_cfgsave(snd_use_case_mgr_t *uc_mgr, const char *filename)
 		}
 		err = snd_config_search(config, root, &config);
 		if (err < 0) {
-			uc_error("Unable to find subtree '%s'", root);
+			snd_error(UCM, "Unable to find subtree '%s'", root);
 			goto _err;
 		}
 	}
 
 	err = snd_output_stdio_open(&out, file, "w+");
 	if (err < 0) {
-		uc_error("unable to open file '%s': %s", file, snd_strerror(err));
+		snd_error(UCM, "unable to open file '%s': %s", file, snd_strerror(err));
 		goto _err;
 	}
 	if (!config || snd_config_is_empty(config)) {
@@ -629,7 +642,7 @@ static int execute_cfgsave(snd_use_case_mgr_t *uc_mgr, const char *filename)
 	}
 	snd_output_close(out);
 	if (err < 0) {
-		uc_error("unable to save configuration: %s", snd_strerror(err));
+		snd_error(UCM, "unable to save configuration: %s", snd_strerror(err));
 		goto _err;
 	}
 _err:
@@ -676,14 +689,16 @@ static int run_device_sequence(snd_use_case_mgr_t *uc_mgr, struct use_case_verb 
 {
 	struct use_case_device *device;
 
+	snd_trace(UCM, "device sequence '%s/%s': %s", verb->name, name, uc_mgr_enable_str(enable));
+
 	if (verb == NULL) {
-		uc_error("error: enadev2 / disdev2 must be executed inside the verb context");
+		snd_error(UCM, "enadev2 / disdev2 must be executed inside the verb context");
 		return -ENOENT;
 	}
 
 	device = find_device(uc_mgr, verb, name, 0);
 	if (device == NULL) {
-		uc_error("error: unable to find device '%s'\n", name);
+		snd_error(UCM, "unable to find device '%s'\n", name);
 		return -ENOENT;
 	}
 
@@ -701,9 +716,11 @@ static int run_device_all_sequence(snd_use_case_mgr_t *uc_mgr, struct use_case_v
 	int err;
 
 	if (verb == NULL) {
-		uc_error("error: disdevall must be executed inside the verb context");
+		snd_error(UCM, "disdevall must be executed inside the verb context");
 		return -ENOENT;
 	}
+
+	snd_trace(UCM, "disable all devices sequence for '%s'", verb->name);
 
 	list_for_each(pos, &verb->device_list) {
 		device = list_entry(pos, struct use_case_device, list);
@@ -741,7 +758,7 @@ static int execute_sequence(snd_use_case_mgr_t *uc_mgr,
 	int err = 0;
 
 	if (uc_mgr->sequence_hops > 100) {
-		uc_error("error: too many inner sequences!");
+		snd_error(UCM, "too many inner sequences!");
 		return -EINVAL;
 	}
 	uc_mgr->sequence_hops++;
@@ -765,7 +782,7 @@ static int execute_sequence(snd_use_case_mgr_t *uc_mgr,
 				 * its parent's cdev stored by ucm manager.
 				 */
 				if (uc_mgr->cdev == NULL) {
-					uc_error("cdev is not defined!");
+					snd_error(UCM, "cdev is not defined!");
 					return err;
 				}
 
@@ -781,7 +798,7 @@ static int execute_sequence(snd_use_case_mgr_t *uc_mgr,
 						 value_list2,
 						 value_list3);
 				if (err < 0 && err != -ENOENT) {
-					uc_error("cdev is not defined!");
+					snd_error(UCM, "cdev is not defined!");
 					return err;
 				}
 				err = get_value3(uc_mgr, &capture_ctl, "CaptureCTL",
@@ -790,12 +807,12 @@ static int execute_sequence(snd_use_case_mgr_t *uc_mgr,
 						 value_list3);
 				if (err < 0 && err != -ENOENT) {
 					free(playback_ctl);
-					uc_error("cdev is not defined!");
+					snd_error(UCM, "cdev is not defined!");
 					return err;
 				}
 				if (playback_ctl == NULL &&
 				    capture_ctl == NULL) {
-					uc_error("cdev is not defined!");
+					snd_error(UCM, "cdev is not defined!");
 					return -EINVAL;
 				}
 				if (playback_ctl != NULL &&
@@ -803,7 +820,7 @@ static int execute_sequence(snd_use_case_mgr_t *uc_mgr,
 				    strcmp(playback_ctl, capture_ctl) != 0) {
 					free(playback_ctl);
 					free(capture_ctl);
-					uc_error("cdev is not equal for playback and capture!");
+					snd_error(UCM, "cdev is not equal for playback and capture!");
 					return -EINVAL;
 				}
 				if (playback_ctl != NULL) {
@@ -816,14 +833,14 @@ static int execute_sequence(snd_use_case_mgr_t *uc_mgr,
 			if (ctl == NULL) {
 				err = uc_mgr_open_ctl(uc_mgr, &ctl_list, cdev, 1);
 				if (err < 0) {
-					uc_error("unable to open ctl device '%s'", cdev);
+					snd_error(UCM, "unable to open ctl device '%s'", cdev);
 					goto __fail;
 				}
 				ctl = ctl_list->ctl;
 			}
 			err = execute_cset(ctl, s->data.cset, s->type);
 			if (err < 0) {
-				uc_error("unable to execute cset '%s'", s->data.cset);
+				snd_error(UCM, "unable to execute cset '%s'", s->data.cset);
 				goto __fail;
 			}
 			break;
@@ -833,6 +850,7 @@ static int execute_sequence(snd_use_case_mgr_t *uc_mgr,
 				goto __fail;
 			break;
 		case SEQUENCE_ELEMENT_TYPE_SLEEP:
+			snd_trace(UCM, "sleeping %li", s->data.sleep);
 			usleep(s->data.sleep);
 			break;
 		case SEQUENCE_ELEMENT_TYPE_EXEC:
@@ -841,7 +859,7 @@ static int execute_sequence(snd_use_case_mgr_t *uc_mgr,
 			ignore_error = s->data.exec[0] == '-';
 			err = uc_mgr_exec(s->data.exec + (ignore_error ? 1 : 0));
 			if (ignore_error == false && err != 0) {
-				uc_error("exec '%s' failed (exit code %d)", s->data.exec, err);
+				snd_error(UCM, "exec '%s' failed (exit code %d)", s->data.exec, err);
 				goto __fail;
 			}
 			break;
@@ -850,12 +868,13 @@ static int execute_sequence(snd_use_case_mgr_t *uc_mgr,
 				break;
 			ignore_error = s->data.exec[0] == '-';
 shell_retry:
+			snd_debug(UCM, "system command '%s'", s->data.exec + (ignore_error ? 1 : 0));
 			err = system(s->data.exec + (ignore_error ? 1 : 0));
 			if (WIFSIGNALED(err)) {
 				err = -EINTR;
 			} if (WIFEXITED(err)) {
 				if (ignore_error == false && WEXITSTATUS(err) != 0) {
-					uc_error("command '%s' failed (exit code %d)", s->data.exec, WEXITSTATUS(err));
+					snd_error(UCM, "command '%s' failed (exit code %d)", s->data.exec, WEXITSTATUS(err));
 					err = -EINVAL;
 					goto __fail;
 				}
@@ -897,7 +916,7 @@ shell_retry:
 				goto __fail;
 			break;
 		default:
-			uc_error("unknown sequence command %i", s->type);
+			snd_error(UCM, "unknown sequence command %i", s->type);
 			break;
 		}
 	}
@@ -932,6 +951,9 @@ static int execute_component_seq(snd_use_case_mgr_t *uc_mgr,
 	struct use_case_device *device = cmpt_seq->device;
 	struct list_head *seq;
 	int err;
+
+	snd_trace(UCM, "execute component sequence '%s': %s", cmpt_seq->device ?
+			cmpt_seq->device->orig_name : NULL, uc_mgr_enable_str(cmpt_seq->enable));
 
 	/* enter component domain and store cdev for the component */
 	uc_mgr->in_component_domain = 1;
@@ -998,21 +1020,240 @@ static int add_auto_values(snd_use_case_mgr_t *uc_mgr)
 /**
  * \brief execute default commands
  * \param uc_mgr Use case manager
+ * \param force Force run
  * \return zero on success, otherwise a negative error code
  */
-static int set_defaults(snd_use_case_mgr_t *uc_mgr)
+static int set_defaults(snd_use_case_mgr_t *uc_mgr, bool force)
 {
 	int err;
 
-	if (uc_mgr->default_list_executed)
+	if (!force && uc_mgr->default_list_executed)
 		return 0;
 	err = execute_sequence(uc_mgr, NULL, &uc_mgr->default_list,
 			       &uc_mgr->value_list, NULL, NULL);
 	if (err < 0) {
-		uc_error("Unable to execute default sequence");
+		snd_error(UCM, "Unable to execute default sequence");
 		return err;
 	}
 	uc_mgr->default_list_executed = 1;
+	return 0;
+}
+
+/**
+ * \brief Read boot information from 'Boot' control element
+ * \param uc_mgr Use case manager
+ * \param boot_time Pointer to boot time output (or NULL)
+ * \param sync_time Pointer to synchronization time window output (or NULL)
+ * \param restore_time Pointer to restore time output (or NULL)
+ * \param primary Pointer to primary card flag output (or NULL)
+ * \return 0 on success, otherwise a negative error code
+ *
+ * Reads the 'Boot' control element with SND_CTL_ELEM_TYPE_INTEGER64 (count=3):
+ * - index 0 = boot time in CLOCK_MONOTONIC_RAW (only seconds)
+ * - index 1 = restore time in CLOCK_MONOTONIC_RAW (only seconds)
+ * - index 2 = primary card number (identifies group)
+ * Returns -1 for all parameters when the control element is not present
+ */
+static int boot_info(snd_use_case_mgr_t *uc_mgr, long long *boot_time, long long *sync_time,
+		     long long *restore_time, long long *primary)
+{
+	struct ctl_list *ctl_list;
+	snd_ctl_elem_id_t *id;
+	snd_ctl_elem_info_t *info;
+	snd_ctl_elem_value_t *value;
+	int err;
+
+	if (boot_time)
+		*boot_time = -1;
+	if (sync_time)
+		*sync_time = -1;
+	if (restore_time)
+		*restore_time = -1;
+	if (primary)
+		*primary = -1;
+
+	ctl_list = uc_mgr_get_master_ctl(uc_mgr);
+	if (ctl_list == NULL || ctl_list->ctl == NULL)
+		return 0;
+
+	snd_ctl_elem_id_alloca(&id);
+	snd_ctl_elem_info_alloca(&info);
+	snd_ctl_elem_value_alloca(&value);
+
+	snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_CARD);
+	snd_ctl_elem_id_set_name(id, ".Boot");
+
+	snd_ctl_elem_info_set_id(info, id);
+	err = snd_ctl_elem_info(ctl_list->ctl, info);
+	if (err < 0)
+		return 0;
+
+	if (snd_ctl_elem_info_get_type(info) != SND_CTL_ELEM_TYPE_INTEGER64) {
+		snd_error(UCM, "Boot control element is not INTEGER64 type");
+		return -EINVAL;
+	}
+
+	if (snd_ctl_elem_info_get_count(info) != 4) {
+		snd_error(UCM, "Boot control element does not have count=4");
+		return -EINVAL;
+	}
+
+	snd_ctl_elem_value_set_id(value, id);
+	err = snd_ctl_elem_read(ctl_list->ctl, value);
+	if (err < 0) {
+		snd_error(UCM, "failed to read Boot control element: %s",
+			  snd_strerror(err));
+		return err;
+	}
+
+	if (boot_time)
+		*boot_time = snd_ctl_elem_value_get_integer64(value, 0);
+	if (sync_time)
+		*restore_time = snd_ctl_elem_value_get_integer64(value, 1);
+	if (restore_time)
+		*restore_time = snd_ctl_elem_value_get_integer64(value, 2);
+	if (primary)
+		*primary = snd_ctl_elem_value_get_integer64(value, 3);
+
+	return 0;
+}
+
+/**
+ * \brief Wait using snd_ctl_read() and snd_ctl_wait() for boot synchronization
+ * \param uc_mgr Use case manager
+ * \param primary_card Primary ALSA card number
+ * \return 0 on success, 1 if reparse is required, negative error code on failure
+ *
+ * This function uses boot_info() to read the Boot control element and waits
+ * until the timeout has passed using snd_ctl_read() and snd_ctl_wait().
+ * No file synchronization is used.
+ */
+static int boot_wait(snd_use_case_mgr_t *uc_mgr, int *_primary_card)
+{
+	char *boot_card_sync_time = NULL;
+	struct ctl_list *ctl_list;
+	snd_ctl_event_t *event;
+	long long boot_time_val, boot_synctime_val, restore_time_val, primary_card;
+	long long timeout = 20;  	/* default timeout in seconds */
+	long long timeout_guard = 5;	/* guard time in seconds */
+	struct timespec start_time, now;
+	int err;
+
+	snd_ctl_event_alloca(&event);
+
+	if (_primary_card)
+		*_primary_card = -1;
+
+	err = get_value1(uc_mgr, &boot_card_sync_time, &uc_mgr->global_value_list, "BootCardSyncTime");
+	if (err == 0 && boot_card_sync_time != NULL) {
+		long sync_time;
+		if (safe_strtol(boot_card_sync_time, &sync_time) == 0 && sync_time > 0 && sync_time <= 240) {
+			timeout = (time_t)sync_time;
+			snd_trace(UCM, "BootCardSyncTime set to %ld seconds", (long)timeout);
+		} else {
+			snd_error(UCM, "Invalid BootCardSyncTime '%s', using default %ld seconds", boot_card_sync_time, (long)timeout);
+		}
+		free(boot_card_sync_time);
+	}
+
+	ctl_list = uc_mgr_get_master_ctl(uc_mgr);
+	if (ctl_list == NULL || ctl_list->ctl == NULL)
+		return -ENODEV;
+
+	err = snd_ctl_subscribe_events(ctl_list->ctl, 1);
+	if (err < 0) {
+		snd_error(UCM, "cannot subscribe to control events: %s", snd_strerror(err));
+		return err;
+	}
+
+	clock_gettime(CLOCK_MONOTONIC_RAW, &start_time);
+
+	/* increase timeout to allow restore controls using udev/systemd */
+	/* when timeout limit exceeds */
+	timeout += timeout_guard;
+
+	while (1) {
+		long long diff, remaining = 0;
+
+		clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+
+		err = boot_info(uc_mgr, &boot_time_val, &boot_synctime_val, &restore_time_val, &primary_card);
+		if (err < 0)
+			goto _fin;
+
+		if (primary_card < INT_MIN || primary_card > INT_MAX) {
+			err = -EINVAL;
+			goto _fin;
+		}
+
+		if (_primary_card)
+			*_primary_card = primary_card;
+
+		snd_trace(UCM, "Boot info: boot_time=%lld, restore_time=%lld, primary=%lld",
+			  boot_time_val, restore_time_val, primary_card);
+
+		if (boot_time_val == -1) {
+			snd_trace(UCM, "Boot control element not present, skipping boot wait");
+			return 0;
+		}
+
+		if (timeout > boot_synctime_val + timeout_guard) {
+			timeout = boot_synctime_val + timeout_guard;
+			snd_trace(UCM, "Boot sychronization time reduced from boot element to %lld", timeout);
+		}
+
+		diff = now.tv_sec - restore_time_val;
+		if (restore_time_val > 0) {
+			snd_trace(UCM, "Controls restored, skipping boot wait");
+			/* if restore was done before short time window, reparse */
+			return diff < timeout_guard;
+		}
+
+		diff = now.tv_sec - start_time.tv_sec;
+		if (diff < 0 || diff >= timeout) {
+			snd_trace(UCM, "Maximum wait time exceeded, proceeding");
+			break;
+		} else {
+			remaining = timeout - diff;
+		}
+
+		diff = now.tv_sec - boot_time_val;
+		snd_trace(UCM, "Boot time diff %lld now %lld", diff, now.tv_sec, boot_time_val);
+		if (diff < 0 || diff >= timeout) {
+			snd_trace(UCM, "Boot timeout reached, proceeding");
+			break;
+		} else {
+			remaining = timeout - diff;
+		}
+
+		snd_trace(UCM, "Boot waiting %lld secs", remaining);
+		err = snd_ctl_wait(ctl_list->ctl, remaining * 1000);
+		if (err < 0) {
+			snd_error(UCM, "snd_ctl_wait failed: %s", snd_strerror(err));
+			goto _fin;
+		}
+
+		if (err == 0)
+			continue;  /* Timeout, no events */
+
+		while (snd_ctl_read(ctl_list->ctl, event) > 0) {
+
+			if (!(snd_ctl_event_elem_get_mask(event) & SND_CTL_EVENT_MASK_VALUE))
+				continue;  /* Not a value change event */
+
+			if (snd_ctl_event_elem_get_interface(event) != SND_CTL_ELEM_IFACE_CARD ||
+			    snd_ctl_event_elem_get_index(event) != 0 ||
+			    strcmp(snd_ctl_event_elem_get_name(event), ".Boot") != 0)
+				continue;
+
+			snd_trace(UCM, "Boot control element value changed");
+			break;
+		}
+	}
+
+	err = 0;
+_fin:
+	snd_ctl_subscribe_events(ctl_list->ctl, 0);
 	return 0;
 }
 
@@ -1024,7 +1265,7 @@ static int set_defaults(snd_use_case_mgr_t *uc_mgr)
 static int import_master_config(snd_use_case_mgr_t *uc_mgr)
 {
 	int err;
-	
+
 	err = uc_mgr_import_master_config(uc_mgr);
 	if (err < 0)
 		return err;
@@ -1207,7 +1448,7 @@ static inline struct use_case_verb *find_verb(snd_use_case_mgr_t *uc_mgr,
 		    verb_name);
 }
 
-static int is_devlist_supported(snd_use_case_mgr_t *uc_mgr, 
+static int is_devlist_supported(snd_use_case_mgr_t *uc_mgr,
 	struct dev_list *dev_list)
 {
 	struct dev_list_node *device;
@@ -1240,13 +1481,13 @@ static int is_devlist_supported(snd_use_case_mgr_t *uc_mgr,
 	return 1 - found_ret;
 }
 
-static inline int is_modifier_supported(snd_use_case_mgr_t *uc_mgr, 
+static inline int is_modifier_supported(snd_use_case_mgr_t *uc_mgr,
 	struct use_case_modifier *modifier)
 {
 	return is_devlist_supported(uc_mgr, &modifier->dev_list);
 }
 
-static inline int is_device_supported(snd_use_case_mgr_t *uc_mgr, 
+static inline int is_device_supported(snd_use_case_mgr_t *uc_mgr,
 	struct use_case_device *device)
 {
 	return is_devlist_supported(uc_mgr, &device->dev_list);
@@ -1351,7 +1592,7 @@ static int set_verb(snd_use_case_mgr_t *uc_mgr,
 	int err;
 
 	if (enable) {
-		err = set_defaults(uc_mgr);
+		err = set_defaults(uc_mgr, false);
 		if (err < 0)
 			return err;
 		seq = &verb->enable_list;
@@ -1436,6 +1677,22 @@ static int set_device(snd_use_case_mgr_t *uc_mgr,
 }
 
 /**
+ * \brief Do the full reset
+ * \param uc_mgr Use case manager
+ * \return zero on success, otherwise a negative error code
+ */
+static int do_reset(snd_use_case_mgr_t *uc_mgr)
+{
+	int err;
+
+	err = set_defaults(uc_mgr, true);
+	INIT_LIST_HEAD(&uc_mgr->active_modifiers);
+	INIT_LIST_HEAD(&uc_mgr->active_devices);
+	uc_mgr->active_verb = NULL;
+	return err;
+}
+
+/**
  * \brief Parse open arguments
  * \param uc_mgr Use case manager
  * \param name name of card to open
@@ -1445,7 +1702,7 @@ const char *parse_open_variables(snd_use_case_mgr_t *uc_mgr, const char *name)
 {
 	const char *end, *id;
 	char *args, *var;
-	snd_config_t *cfg, *n;
+	snd_config_t *cfg = NULL, *n;
 	snd_config_iterator_t i, next;
 	char vname[128];
 	size_t l;
@@ -1461,7 +1718,7 @@ const char *parse_open_variables(snd_use_case_mgr_t *uc_mgr, const char *name)
 
 	err = snd_config_load_string(&cfg, args, 0);
 	if (err < 0) {
-		uc_error("error: open arguments are not valid (%s)", args);
+		snd_error(UCM, "open arguments are not valid (%s)", args);
 		goto skip;
 	}
 
@@ -1482,21 +1739,22 @@ const char *parse_open_variables(snd_use_case_mgr_t *uc_mgr, const char *name)
 	}
 
 skip:
-	snd_config_delete(cfg);
+	if (cfg)
+		snd_config_delete(cfg);
 	return end + 3;
 }
 
-/**
- * \brief Init sound card use case manager.
- * \param uc_mgr Returned use case manager pointer
- * \param card_name name of card to open
- * \return zero on success, otherwise a negative error code
- */
 int snd_use_case_mgr_open(snd_use_case_mgr_t **uc_mgr,
 			  const char *card_name)
 {
 	snd_use_case_mgr_t *mgr;
-	int err;
+	int err, boot_result = 0, ucm_card, primary_card;
+	char *s;
+
+	snd_trace(UCM, "{API call} open '%s'", card_name);
+
+	if (card_name == NULL)
+		return -EINVAL;
 
 	/* create a new UCM */
 	mgr = calloc(1, sizeof(snd_use_case_mgr_t));
@@ -1507,19 +1765,24 @@ int snd_use_case_mgr_open(snd_use_case_mgr_t **uc_mgr,
 	INIT_LIST_HEAD(&mgr->boot_list);
 	INIT_LIST_HEAD(&mgr->default_list);
 	INIT_LIST_HEAD(&mgr->value_list);
+	INIT_LIST_HEAD(&mgr->global_value_list);
 	INIT_LIST_HEAD(&mgr->active_modifiers);
 	INIT_LIST_HEAD(&mgr->active_devices);
 	INIT_LIST_HEAD(&mgr->ctl_list);
 	INIT_LIST_HEAD(&mgr->variable_list);
 	pthread_mutex_init(&mgr->mutex, NULL);
 
-	if (card_name && *card_name == '-') {
+	if (*card_name == '-') {
 		card_name++;
 		mgr->suppress_nodev_errors = 1;
 	}
 
-	if (card_name && card_name[0] == '<' && card_name[1] == '<' && card_name[2] == '<')
+	if (card_name[0] == '<' && card_name[1] == '<' && card_name[2] == '<')
 		card_name = parse_open_variables(mgr, card_name);
+
+	/* Application developers: This argument is not supposed to be set for standard applications. */
+	if (uc_mgr_get_variable(mgr, "@InBoot", false))
+		mgr->in_boot = true;
 
 	err = uc_mgr_card_open(mgr);
 	if (err < 0) {
@@ -1533,41 +1796,89 @@ int snd_use_case_mgr_open(snd_use_case_mgr_t **uc_mgr,
 		goto _err;
 	}
 
+_reparse:
 	/* get info on use_cases and verify against card */
 	err = import_master_config(mgr);
 	if (err < 0) {
 		if (err == -ENXIO && mgr->suppress_nodev_errors)
 			goto _err;
-		uc_error("error: failed to import %s use case configuration %d",
-			 card_name, err);
+		snd_error(UCM, "failed to import %s use case configuration %d",
+			       card_name, err);
+
 		goto _err;
 	}
 
-	err = check_empty_configuration(mgr);
-	if (err < 0) {
-		uc_error("error: failed to import %s (empty configuration)", card_name);
-		goto _err;
+	if (!mgr->card_group) {
+		err = check_empty_configuration(mgr);
+		if (err < 0) {
+			snd_error(UCM, "failed to import %s (empty configuration)", card_name);
+			goto _err;
+		}
 	}
 
+	/* Handle BootCardGroup timestamp file logic (conf version 8+) */
+	if (mgr->conf_format < 8 || !mgr->card_group)
+		goto _std;
+
+	/* Skip if guard time passed (boot_result == 1) */
+	ucm_card = uc_mgr_card_number(uc_mgr_get_master_ctl(mgr));
+	if (ucm_card >= 0 && boot_result == 0) {
+		/* If InBoot open argument is present, skip this wait loop */
+		if (mgr->in_boot)
+			goto _std;
+
+		boot_result = boot_wait(mgr, &primary_card);
+		if (boot_result < 0) {
+			snd_error(UCM, "boot_wait failed");
+			err = boot_result;
+			goto _err;
+		}
+
+		/* Check if this card is marked as primary (primary_card == 1) */
+		if (primary_card != ucm_card) {
+			/* Not the primary card, mark as linked */
+			uc_mgr_free_verb(mgr);
+			uc_mgr_free_ctl_list(mgr);
+			s = strdup("1");
+			if (s == NULL) {
+				err = -ENOMEM;
+				goto _err;
+			}
+			err = uc_mgr_add_value(&mgr->value_list, "Linked", s);
+			if (err < 0)
+				goto _err;
+			goto _std;
+		}
+
+		/* Reparse, if the restore time window is short */
+		if (boot_result > 0) {
+			uc_mgr_free_verb(mgr);
+			uc_mgr_free_ctl_list(mgr);
+			goto _reparse;
+		}
+	}
+
+_std:
 	*uc_mgr = mgr;
+	snd_trace(UCM, "{API call} open '%s' succeed", card_name);
 	return 0;
 
 _err:
 	uc_mgr_card_close(mgr);
 	uc_mgr_free(mgr);
+	snd_trace(UCM, "{API call} open '%s' failed: %s", card_name, snd_strerror(err));
 	return err;
 }
 
-/**
- * \brief Reload and reparse all use case files.
- * \param uc_mgr Use case manager
- * \return zero on success, otherwise a negative error code
- */
 int snd_use_case_mgr_reload(snd_use_case_mgr_t *uc_mgr)
 {
 	int err;
 
+	snd_trace(UCM, "{API call} reload");
+
 	pthread_mutex_lock(&uc_mgr->mutex);
+
+	do_reset(uc_mgr);
 
 	uc_mgr_free_verb(uc_mgr);
 
@@ -1576,7 +1887,7 @@ int snd_use_case_mgr_reload(snd_use_case_mgr_t *uc_mgr)
 	/* reload all use cases */
 	err = import_master_config(uc_mgr);
 	if (err < 0) {
-		uc_error("error: failed to reload use cases");
+		snd_error(UCM, "failed to reload use cases");
 		pthread_mutex_unlock(&uc_mgr->mutex);
 		return -EINVAL;
 	}
@@ -1585,11 +1896,6 @@ int snd_use_case_mgr_reload(snd_use_case_mgr_t *uc_mgr)
 	return err;
 }
 
-/**
- * \brief Close use case manager.
- * \param uc_mgr Use case manager
- * \return zero on success, otherwise a negative error code
- */
 int snd_use_case_mgr_close(snd_use_case_mgr_t *uc_mgr)
 {
 	uc_mgr_card_close(uc_mgr);
@@ -1613,7 +1919,7 @@ static int dismantle_use_case(snd_use_case_mgr_t *uc_mgr)
 				      active_list);
 		err = set_modifier(uc_mgr, modifier, 0);
 		if (err < 0)
-			uc_error("Unable to disable modifier %s", modifier->name);
+			snd_error(UCM, "Unable to disable modifier %s", modifier->name);
 	}
 	INIT_LIST_HEAD(&uc_mgr->active_modifiers);
 
@@ -1622,38 +1928,28 @@ static int dismantle_use_case(snd_use_case_mgr_t *uc_mgr)
 				    active_list);
 		err = set_device(uc_mgr, device, 0);
 		if (err < 0)
-			uc_error("Unable to disable device %s", device->name);
+			snd_error(UCM, "Unable to disable device %s", device->name);
 	}
 	INIT_LIST_HEAD(&uc_mgr->active_devices);
 
 	err = set_verb(uc_mgr, uc_mgr->active_verb, 0);
 	if (err < 0) {
-		uc_error("Unable to disable verb %s", uc_mgr->active_verb->name);
+		snd_error(UCM, "Unable to disable verb %s", uc_mgr->active_verb->name);
 		return err;
 	}
 	uc_mgr->active_verb = NULL;
 
-	err = execute_sequence(uc_mgr, NULL, &uc_mgr->default_list,
-			       &uc_mgr->value_list, NULL, NULL);
-	
+	err = set_defaults(uc_mgr, true);
+
 	return err;
 }
 
-/**
- * \brief Reset sound card controls to default values.
- * \param uc_mgr Use case manager
- * \return zero on success, otherwise a negative error code
- */
 int snd_use_case_mgr_reset(snd_use_case_mgr_t *uc_mgr)
 {
 	int err;
 
 	pthread_mutex_lock(&uc_mgr->mutex);
-	err = execute_sequence(uc_mgr, NULL, &uc_mgr->default_list,
-			       &uc_mgr->value_list, NULL, NULL);
-	INIT_LIST_HEAD(&uc_mgr->active_modifiers);
-	INIT_LIST_HEAD(&uc_mgr->active_devices);
-	uc_mgr->active_verb = NULL;
+	err = do_reset(uc_mgr);
 	pthread_mutex_unlock(&uc_mgr->mutex);
 	return err;
 }
@@ -2079,22 +2375,18 @@ static int get_enabled_modifier_list(snd_use_case_mgr_t *uc_mgr,
 			name);
 }
 
-/**
- * \brief Obtain a list of entries
- * \param uc_mgr Use case manager (may be NULL - card list)
- * \param identifier (may be NULL - card list)
- * \param list Returned allocated list
- * \return Number of list entries if success, otherwise a negative error code
- */
 int snd_use_case_get_list(snd_use_case_mgr_t *uc_mgr,
 			  const char *identifier,
 			  const char **list[])
 {
-	char *str, *str1;
-	int err;
+	char *str;
+	const char *str1;
+	int err, i;
 
-	if (uc_mgr == NULL || identifier == NULL)
-		return uc_mgr_scan_master_configs(list);
+	if (uc_mgr == NULL || identifier == NULL) {
+		err = uc_mgr_scan_master_configs(list);
+		goto __end_unlocked;
+	}
 	pthread_mutex_lock(&uc_mgr->mutex);
 	if (strcmp(identifier, "_verbs") == 0)
 		err = get_verb_list(uc_mgr, list);
@@ -2132,6 +2424,10 @@ int snd_use_case_get_list(snd_use_case_mgr_t *uc_mgr,
 	}
       __end:
 	pthread_mutex_unlock(&uc_mgr->mutex);
+      __end_unlocked:
+	snd_trace(UCM, "{API call} get list '%s': %d (%s)", identifier, err, snd_strerror(err));
+	for (i = 0; i < err; i++)
+		snd_trace(UCM, " [%d]='%s'", i, (*list)[i]);
 	return err;
 }
 
@@ -2249,6 +2545,10 @@ static int get_value(snd_use_case_mgr_t *uc_mgr,
 	if (err >= 0 || err != -ENOENT)
 		return err;
 
+	err = get_value1(uc_mgr, value, &uc_mgr->global_value_list, identifier);
+	if (err >= 0 || err != -ENOENT)
+		return err;
+
 	return -ENOENT;
 }
 
@@ -2296,16 +2596,6 @@ static int get_alibpref(snd_use_case_mgr_t *uc_mgr, char **str)
 	return 0;
 }
 
-/**
- * \brief Get current - string
- * \param uc_mgr Use case manager
- * \param identifier 
- * \param value Value pointer
- * \return Zero if success, otherwise a negative error code
- *
- * Note: String is dynamically allocated, use free() to
- * deallocate this string.
- */      
 int snd_use_case_get(snd_use_case_mgr_t *uc_mgr,
 		     const char *identifier,
 		     const char **value)
@@ -2396,22 +2686,36 @@ int snd_use_case_get(snd_use_case_mgr_t *uc_mgr,
 	}
       __end:
 	pthread_mutex_unlock(&uc_mgr->mutex);
+	snd_trace(UCM, "{API call} get string '%s'='%s' (error %s)", identifier, err >= 0 ? *value : NULL, snd_strerror(err));
 	return err;
 }
 
-
-/**
- * \brief Get current - integer
- * \param uc_mgr Use case manager
- * \param identifier 
- * \return Value if success, otherwise a negative error code 
+/*
+ * a helper macro to obtain status and existence
  */
+#define geti(uc_mgr, status, ifind, str, value) ({ \
+	long val = -EINVAL; \
+	if (str) { \
+		val = (status)((uc_mgr), (str)); \
+		if (val >= 0) { \
+			if ((ifind)((uc_mgr), (uc_mgr)->active_verb, (str), 0)) { \
+				*(value) = val; \
+				val = 0; \
+			} else { \
+				val = -ENOENT; \
+			} \
+		} \
+	} \
+	; val; /* return value */ \
+})
+
 int snd_use_case_geti(snd_use_case_mgr_t *uc_mgr,
 		      const char *identifier,
 		      long *value)
 {
-	char *str, *str1;
-	long err;
+	char *str;
+	const char *str1;
+	int err;
 
 	pthread_mutex_lock(&uc_mgr->mutex);
 	if (0) {
@@ -2428,31 +2732,15 @@ int snd_use_case_geti(snd_use_case_mgr_t *uc_mgr,
 			str = NULL;
 		}
 		if (check_identifier(identifier, "_devstatus")) {
-			if (!str) {
-				err = -EINVAL;
-				goto __end;
-			}
-			err = device_status(uc_mgr, str);
-			if (err >= 0) {
-				*value = err;
-				err = 0;
-			}
+			err = geti(uc_mgr, device_status, find_device, str, value);
 		} else if (check_identifier(identifier, "_modstatus")) {
-			if (!str) {
-				err = -EINVAL;
-				goto __end;
-			}
-			err = modifier_status(uc_mgr, str);
-			if (err >= 0) {
-				*value = err;
-				err = 0;
-			}
+			err = geti(uc_mgr, modifier_status, find_modifier, str, value);
 #if 0
 		/*
 		 * enable this block if the else clause below is expanded to query
 		 * user-supplied values
 		 */
-		} else if (identifier[0] == '_')
+		} else if (identifier[0] == '_') {
 			err = -ENOENT;
 #endif
 		} else
@@ -2462,6 +2750,7 @@ int snd_use_case_geti(snd_use_case_mgr_t *uc_mgr,
 	}
       __end:
 	pthread_mutex_unlock(&uc_mgr->mutex);
+	snd_trace(UCM, "{API call} get integer '%s'=%li (error %s)", identifier, err >= 0 ? *value : -1, snd_strerror(err));
 	return err;
 }
 
@@ -2471,7 +2760,7 @@ static int set_fixedboot_user(snd_use_case_mgr_t *uc_mgr,
 	int err;
 
 	if (value != NULL && *value) {
-		uc_error("error: wrong value for _fboot (%s)", value);
+		snd_error(UCM, "wrong value for _fboot (%s)", value);
 		return -EINVAL;
 	}
 	if (list_empty(&uc_mgr->fixedboot_list))
@@ -2479,7 +2768,7 @@ static int set_fixedboot_user(snd_use_case_mgr_t *uc_mgr,
 	err = execute_sequence(uc_mgr, NULL, &uc_mgr->fixedboot_list,
 			       &uc_mgr->value_list, NULL, NULL);
 	if (err < 0) {
-		uc_error("Unable to execute force boot sequence");
+		snd_error(UCM, "Unable to execute force boot sequence");
 		return err;
 	}
 	return err;
@@ -2491,7 +2780,7 @@ static int set_boot_user(snd_use_case_mgr_t *uc_mgr,
 	int err;
 
 	if (value != NULL && *value) {
-		uc_error("error: wrong value for _boot (%s)", value);
+		snd_error(UCM, "wrong value for _boot (%s)", value);
 		return -EINVAL;
 	}
 	if (list_empty(&uc_mgr->boot_list))
@@ -2499,7 +2788,7 @@ static int set_boot_user(snd_use_case_mgr_t *uc_mgr,
 	err = execute_sequence(uc_mgr, NULL, &uc_mgr->boot_list,
 			       &uc_mgr->value_list, NULL, NULL);
 	if (err < 0) {
-		uc_error("Unable to execute boot sequence");
+		snd_error(UCM, "Unable to execute boot sequence");
 		return err;
 	}
 	return err;
@@ -2509,10 +2798,10 @@ static int set_defaults_user(snd_use_case_mgr_t *uc_mgr,
 			     const char *value)
 {
 	if (value != NULL && *value) {
-		uc_error("error: wrong value for _defaults (%s)", value);
+		snd_error(UCM, "wrong value for _defaults (%s)", value);
 		return -EINVAL;
 	}
-	return set_defaults(uc_mgr);
+	return set_defaults(uc_mgr, false);
 }
 
 static int handle_transition_verb(snd_use_case_mgr_t *uc_mgr,
@@ -2544,6 +2833,8 @@ static int set_verb_user(snd_use_case_mgr_t *uc_mgr,
 	struct use_case_verb *verb;
 	int err = 0;
 
+	snd_trace(UCM, "{API call} set verb '%s'", verb_name);
+
 	if (uc_mgr->active_verb &&
 	    strcmp(uc_mgr->active_verb->name, verb_name) == 0)
 		return 0;
@@ -2555,7 +2846,9 @@ static int set_verb_user(snd_use_case_mgr_t *uc_mgr,
 		verb = NULL;
 	}
 	if (uc_mgr->active_verb) {
-		err = handle_transition_verb(uc_mgr, verb);
+		err = 0;
+		if (verb != NULL)
+			err = handle_transition_verb(uc_mgr, verb);
 		if (err == 0) {
 			err = dismantle_use_case(uc_mgr);
 			if (err < 0)
@@ -2570,8 +2863,8 @@ static int set_verb_user(snd_use_case_mgr_t *uc_mgr,
 	if (verb) {
 		err = set_verb(uc_mgr, verb, 1);
 		if (err < 0)
-			uc_error("error: failed to initialize new use case: %s",
-				 verb_name);
+			snd_error(UCM, "failed to initialize new use case: %s", verb_name);
+
 	}
 	return err;
 }
@@ -2583,6 +2876,7 @@ static int set_device_user(snd_use_case_mgr_t *uc_mgr,
 {
 	struct use_case_device *device;
 
+	snd_trace(UCM, "{API call} set device '%s'", device_name);
 	if (uc_mgr->active_verb == NULL)
 		return -ENOENT;
 	device = find_device(uc_mgr, uc_mgr->active_verb, device_name, 1);
@@ -2596,6 +2890,8 @@ static int set_modifier_user(snd_use_case_mgr_t *uc_mgr,
 			     int enable)
 {
 	struct use_case_modifier *modifier;
+
+	snd_trace(UCM, "{API call} set modifier '%s': %s", modifier_name, uc_mgr_enable_str(enable));
 
 	if (uc_mgr->active_verb == NULL)
 		return -ENOENT;
@@ -2615,14 +2911,15 @@ static int switch_device(snd_use_case_mgr_t *uc_mgr,
 	struct list_head *pos;
 	int err, seq_found = 0;
 
+	snd_trace(UCM, "{API call} switch device '%s'->'%s'", old_device, new_device);
 	if (uc_mgr->active_verb == NULL)
 		return -ENOENT;
 	if (device_status(uc_mgr, old_device) == 0) {
-		uc_error("error: device %s not enabled", old_device);
+		snd_error(UCM, "device %s not enabled", old_device);
 		return -EINVAL;
 	}
 	if (device_status(uc_mgr, new_device) != 0) {
-		uc_error("error: device %s already enabled", new_device);
+		snd_error(UCM, "device %s already enabled", new_device);
 		return -EINVAL;
 	}
 	xold = find_device(uc_mgr, uc_mgr->active_verb, old_device, 1);
@@ -2670,14 +2967,15 @@ static int switch_modifier(snd_use_case_mgr_t *uc_mgr,
 	struct list_head *pos;
 	int err, seq_found = 0;
 
+	snd_trace(UCM, "{API call} switch modifier '%s'->'%s'", old_modifier, new_modifier);
 	if (uc_mgr->active_verb == NULL)
 		return -ENOENT;
 	if (modifier_status(uc_mgr, old_modifier) == 0) {
-		uc_error("error: modifier %s not enabled", old_modifier);
+		snd_error(UCM, "modifier %s not enabled", old_modifier);
 		return -EINVAL;
 	}
 	if (modifier_status(uc_mgr, new_modifier) != 0) {
-		uc_error("error: modifier %s already enabled", new_modifier);
+		snd_error(UCM, "modifier %s already enabled", new_modifier);
 		return -EINVAL;
 	}
 	xold = find_modifier(uc_mgr, uc_mgr->active_verb, old_modifier, 1);
@@ -2714,20 +3012,15 @@ static int switch_modifier(snd_use_case_mgr_t *uc_mgr,
 	return err;
 }
 
-/**
- * \brief Set new
- * \param uc_mgr Use case manager
- * \param identifier
- * \param value Value
- * \return Zero if success, otherwise a negative error code
- */
 int snd_use_case_set(snd_use_case_mgr_t *uc_mgr,
 		     const char *identifier,
 		     const char *value)
 {
-	char *str, *str1;
+	char *str;
+	const char *str1;
 	int err = 0;
 
+	snd_trace(UCM, "{API call} set '%s'='%s'", identifier, value);
 	pthread_mutex_lock(&uc_mgr->mutex);
 	if (strcmp(identifier, "_fboot") == 0)
 		err = set_fixedboot_user(uc_mgr, value);
@@ -2773,7 +3066,7 @@ int snd_use_case_set(snd_use_case_mgr_t *uc_mgr,
 
 /**
  * \brief Parse control element identifier
- * \param elem_id Element identifier
+ * \param dst Element identifier
  * \param ucm_id Use case identifier
  * \param value String value to be parsed
  * \return Zero if success, otherwise a negative error code
@@ -2793,7 +3086,7 @@ int snd_use_case_parse_ctl_elem_id(snd_ctl_elem_id_t *dst,
 	    strcmp(ucm_id, "CaptureSwitch"))
 		return -EINVAL;
 	snd_ctl_elem_id_clear(dst);
-	if (strcasestr(ucm_id, "name="))
+	if (strcasestr(value, "name="))
 		return __snd_ctl_ascii_elem_id_parse(dst, value, NULL);
 	iface = SND_CTL_ELEM_IFACE_MIXER;
 	if (jack_control)

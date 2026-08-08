@@ -26,6 +26,7 @@
  *
  */
 
+#include "control_local.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -33,13 +34,14 @@
 #ifndef HAVE_SOFT_FLOAT
 #include <math.h>
 #endif
-#include "control_local.h"
 
 #ifndef DOC_HIDDEN
 /* convert to index of integer array */
 #define int_index(size)	(((size) + sizeof(int) - 1) / sizeof(int))
 /* max size of a TLV entry for dB information (including compound one) */
 #define MAX_TLV_RANGE_SIZE	256
+/* min length of a TLV stream to contain type and size */
+#define MIN_TLV_STREAM_LEN	((SNDRV_CTL_TLVO_LEN + 1) * sizeof(int))
 #endif
 
 /**
@@ -47,12 +49,12 @@
  * \param tlv the TLV source
  * \param tlv_size the byte size of TLV source
  * \param db_tlvp the pointer stored the dB TLV information
- * \return the byte size of dB TLV information if found in the given
- *   TLV source, or a negative error code.
+ * \return The byte size of dB TLV information if found in the given TLV
+ *   source, -ENOENT if not found, or a negative error code in case of an error.
  *
  * This function parses the given TLV source and stores the TLV start
  * point if the TLV information regarding dB conversion is found.
- * The stored TLV pointer can be passed to the convesion functions
+ * The stored TLV pointer can be passed to the conversion functions
  * #snd_tlv_convert_to_dB(), #snd_tlv_convert_from_dB() and
  * #snd_tlv_get_dB_range().
  */
@@ -64,12 +66,19 @@ int snd_tlv_parse_dB_info(unsigned int *tlv,
 	unsigned int size;
 	int err;
 
+	/* Validate that it is possible to read the type and size
+	 * without reading past the end of the buffer. */
+	if (tlv_size < MIN_TLV_STREAM_LEN) {
+		snd_error(CONTROL, "TLV stream too short");
+		return -EINVAL;
+	}
+
 	*db_tlvp = NULL;
 	type = tlv[SNDRV_CTL_TLVO_TYPE];
 	size = tlv[SNDRV_CTL_TLVO_LEN];
 	tlv_size -= 2 * sizeof(int);
 	if (size > tlv_size) {
-		SNDERR("TLV size error");
+		snd_error(CONTROL, "TLV size error");
 		return -EINVAL;
 	}
 	switch (type) {
@@ -79,7 +88,7 @@ int snd_tlv_parse_dB_info(unsigned int *tlv,
 		while (size > 0) {
 			unsigned int len;
 			err = snd_tlv_parse_dB_info(tlv, size, db_tlvp);
-			if (err < 0)
+			if (err < 0 && err != -ENOENT)
 				return err; /* error */
 			if (err > 0)
 				return err; /* found */
@@ -101,11 +110,11 @@ int snd_tlv_parse_dB_info(unsigned int *tlv,
 		else
 			minsize = 2 * sizeof(int);
 		if (size < minsize) {
-			SNDERR("Invalid dB_scale TLV size");
+			snd_error(CONTROL, "Invalid dB_scale TLV size");
 			return -EINVAL;
 		}
 		if (size > MAX_TLV_RANGE_SIZE) {
-			SNDERR("Too big dB_scale TLV size: %d", size);
+			snd_error(CONTROL, "Too big dB_scale TLV size: %d", size);
 			return -EINVAL;
 		}
 		*db_tlvp = tlv;
@@ -114,7 +123,7 @@ int snd_tlv_parse_dB_info(unsigned int *tlv,
 	default:
 		break;
 	}
-	return -EINVAL; /* not found */
+	return -ENOENT;
 }
 
 /**

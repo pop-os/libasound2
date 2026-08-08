@@ -1,4 +1,3 @@
-.*
 !.travis.yml
 configure
 config.log
@@ -35,7 +34,6 @@ include/version.h
 include/alsa
 include/asoundlib.h
 utils/alsa-lib.spec
-alsalisp/alsalisp
 aserver/aserver
 m4/libtool.m4
 m4/ltoptions.m4
@@ -43,6 +41,7 @@ m4/ltsugar.m4
 m4/ltversion.m4
 m4/lt~obsolete.m4
 src/Versions
+src/Versions.in
 src/conf/topology/sklrt286/data/pvt_data
 src/control/ctl_symbols_list.c
 src/pcm/pcm_symbols_list.c
@@ -64,6 +63,8 @@ test/playmidi1
 test/queue_timer
 test/rawmidi
 test/seq
+test/seq-ump-example
 test/timer
+test/umpinfo
 test/lsb/config
 test/lsb/midi_event

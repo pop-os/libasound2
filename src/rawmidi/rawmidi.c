@@ -86,7 +86,7 @@ is passed to \link ::snd_rawmidi_open() \endlink or \link ::snd_rawmidi_open_lco
 It contains two parts: device name and arguments. Devices and arguments are described
 in configuration files. The usual place for default definitions is at /usr/share/alsa/alsa.conf.
 
-\subsection rawmidi_dev_names_default 
+\subsection rawmidi_dev_names_default
 
 The default device is equal to hw device. The defaults are used:
 
@@ -132,7 +132,7 @@ The timestamping is available only on input streams.
 The full featured examples with cross-links:
 
 \par Simple input/output test program
-\ref example_test_rawmidi "example code"
+\link example_test_rawmidi example code \endlink
 \par
 This example shows open and read/write rawmidi operations.
 
@@ -141,14 +141,15 @@ This example shows open and read/write rawmidi operations.
 /**
  * \example ../test/rawmidi.c
  * \anchor example_test_rawmidi
+ * Shows open and read/write rawmidi operations.
  */
- 
+
+#include "rawmidi_local.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <unistd.h>
 #include <string.h>
-#include "rawmidi_local.h"
 
 /**
  * \brief setup the default parameters
@@ -187,30 +188,30 @@ static int snd_rawmidi_open_conf(snd_rawmidi_t **inputp, snd_rawmidi_t **outputp
 #endif
 	if (snd_config_get_type(rawmidi_conf) != SND_CONFIG_TYPE_COMPOUND) {
 		if (name)
-			SNDERR("Invalid type for RAWMIDI %s definition", name);
+			snd_error(RAWMIDI, "Invalid type for RAWMIDI %s definition", name);
 		else
-			SNDERR("Invalid type for RAWMIDI definition");
+			snd_error(RAWMIDI, "Invalid type for RAWMIDI definition");
 		return -EINVAL;
 	}
 	err = snd_config_search(rawmidi_conf, "type", &conf);
 	if (err < 0) {
-		SNDERR("type is not defined");
+		snd_error(RAWMIDI, "type is not defined");
 		return err;
 	}
 	err = snd_config_get_id(conf, &id);
 	if (err < 0) {
-		SNDERR("unable to get id");
+		snd_error(RAWMIDI, "unable to get id");
 		return err;
 	}
 	err = snd_config_get_string(conf, &str);
 	if (err < 0) {
-		SNDERR("Invalid type for %s", id);
+		snd_error(RAWMIDI, "Invalid type for %s", id);
 		return err;
 	}
 	err = snd_config_search_definition(rawmidi_root, "rawmidi_type", str, &type_conf);
 	if (err >= 0) {
 		if (snd_config_get_type(type_conf) != SND_CONFIG_TYPE_COMPOUND) {
-			SNDERR("Invalid type for RAWMIDI type %s definition", str);
+			snd_error(RAWMIDI, "Invalid type for RAWMIDI type %s definition", str);
 			err = -EINVAL;
 			goto _err;
 		}
@@ -224,7 +225,7 @@ static int snd_rawmidi_open_conf(snd_rawmidi_t **inputp, snd_rawmidi_t **outputp
 			if (strcmp(id, "lib") == 0) {
 				err = snd_config_get_string(n, &lib);
 				if (err < 0) {
-					SNDERR("Invalid type for %s", id);
+					snd_error(RAWMIDI, "Invalid type for %s", id);
 					goto _err;
 				}
 				continue;
@@ -232,12 +233,12 @@ static int snd_rawmidi_open_conf(snd_rawmidi_t **inputp, snd_rawmidi_t **outputp
 			if (strcmp(id, "open") == 0) {
 				err = snd_config_get_string(n, &open_name);
 				if (err < 0) {
-					SNDERR("Invalid type for %s", id);
+					snd_error(RAWMIDI, "Invalid type for %s", id);
 					goto _err;
 				}
 				continue;
 			}
-			SNDERR("Unknown field %s", id);
+			snd_error(RAWMIDI, "Unknown field %s", id);
 			err = -EINVAL;
 			goto _err;
 		}
@@ -289,7 +290,7 @@ static int snd_rawmidi_open_noupdate(snd_rawmidi_t **inputp, snd_rawmidi_t **out
 	snd_config_t *rawmidi_conf;
 	err = snd_config_search_definition(root, "rawmidi", name, &rawmidi_conf);
 	if (err < 0) {
-		SNDERR("Unknown RawMidi %s", name);
+		snd_error(RAWMIDI, "Unknown RawMidi %s", name);
 		return err;
 	}
 	err = snd_rawmidi_open_conf(inputp, outputp, name, root, rawmidi_conf, mode);
@@ -359,7 +360,7 @@ int snd_rawmidi_open_lconf(snd_rawmidi_t **inputp, snd_rawmidi_t **outputp,
 int snd_rawmidi_close(snd_rawmidi_t *rawmidi)
 {
 	int err;
-  	assert(rawmidi);
+	assert(rawmidi);
 	err = rawmidi->ops->close(rawmidi);
 	free(rawmidi->name);
 	if (rawmidi->open_func)
@@ -447,12 +448,12 @@ int snd_rawmidi_poll_descriptors(snd_rawmidi_t *rawmidi, struct pollfd *pfds, un
  */
 int snd_rawmidi_poll_descriptors_revents(snd_rawmidi_t *rawmidi, struct pollfd *pfds, unsigned int nfds, unsigned short *revents)
 {
-        assert(rawmidi && pfds && revents);
-        if (nfds == 1) {
-                *revents = pfds->revents;
-                return 0;
-        }
-        return -EINVAL;
+	assert(rawmidi && pfds && revents);
+	if (nfds == 1) {
+		*revents = pfds->revents;
+		return 0;
+	}
+	return -EINVAL;
 }
 
 /**
@@ -639,6 +640,22 @@ unsigned int snd_rawmidi_info_get_subdevices_avail(const snd_rawmidi_info_t *inf
 }
 
 /**
+ * \brief get the tied device number for the given rawmidi device
+ * \param info pointer to a snd_rawmidi_info_t structure
+ * \return the device number for the tied device, or -1 if untied / unknown.
+ *
+ * This function is useful for UMP rawmidi devices where each of them may
+ * have the mirroring legacy rawmidi device. Those are shown as "tied".
+ */
+int snd_rawmidi_info_get_tied_device(const snd_rawmidi_info_t *info)
+{
+	assert(info);
+	if (info->tied_device > 0)
+		return info->tied_device - 1;
+	return -1;
+}
+
+/**
  * \brief set rawmidi device number
  * \param info pointer to a snd_rawmidi_info_t structure
  * \param val device number
@@ -794,11 +811,15 @@ size_t snd_rawmidi_params_get_avail_min(const snd_rawmidi_params_t *params)
 }
 
 /**
- * \brief set no-active-sensing action on snd_rawmidi_close()
+ * \brief control whether an Active Sensing byte is sent on output close
  * \param rawmidi RawMidi handle
  * \param params pointer to snd_rawmidi_params_t structure
- * \param val value: 0 = enable to send the active sensing message, 1 = disable
+ * \param val 0 = send Active Sensing (0xFE) when the output stream is closed,
+ *            1 = suppress it (default)
  * \return 0 on success otherwise a negative error code
+ *
+ * This setting applies to the \b output direction only.  It does not filter
+ * or suppress incoming Active Sensing messages received on an input stream.
  */
 #ifndef DOXYGEN
 int snd_rawmidi_params_set_no_active_sensing(snd_rawmidi_t *rawmidi ATTRIBUTE_UNUSED, snd_rawmidi_params_t *params, int val)
@@ -814,7 +835,7 @@ int snd_rawmidi_params_set_no_active_sensing(snd_rawmidi_t *rawmidi, snd_rawmidi
 /**
  * \brief get no-active-sensing action status
  * \param params pointer to snd_rawmidi_params_t structure
- * \return the current status (0 = enable, 1 = disable the active sensing message)
+ * \return 0 if an Active Sensing byte will be sent on output close, 1 if suppressed
  */
 int snd_rawmidi_params_get_no_active_sensing(const snd_rawmidi_params_t *params)
 {
@@ -1120,3 +1141,22 @@ ssize_t snd_rawmidi_tread(snd_rawmidi_t *rawmidi, struct timespec *tstamp, void 
 		return -ENOTSUP;
 	return (rawmidi->ops->tread)(rawmidi, tstamp, buffer, size);
 }
+
+#ifndef DOXYGEN
+/*
+ * internal API functions for obtaining UMP info from rawmidi instance
+ */
+int _snd_rawmidi_ump_endpoint_info(snd_rawmidi_t *rmidi, void *info)
+{
+	if (!rmidi->ops->ump_endpoint_info)
+		return -ENXIO;
+	return rmidi->ops->ump_endpoint_info(rmidi, info);
+}
+
+int _snd_rawmidi_ump_block_info(snd_rawmidi_t *rmidi, void *info)
+{
+	if (!rmidi->ops->ump_block_info)
+		return -ENXIO;
+	return rmidi->ops->ump_block_info(rmidi, info);
+}
+#endif /* DOXYGEN */

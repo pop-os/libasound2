@@ -38,16 +38,76 @@ static int get_string(snd_config_t *compound, const char *key, const char **str)
 	return snd_config_get_string(node, str);
 }
 
-static int if_eval_string(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval)
+typedef int (*string_compare_t)(const char *s1, const char *s2);
+
+static int compare_strings(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval,
+			   const char *key1, const char *key2,
+			   string_compare_t compare)
 {
 	const char *string1 = NULL, *string2 = NULL;
 	char *s1, *s2;
+	int err, result;
+
+	err = get_string(eval, key1, &string1);
+	if (err < 0 && err != -ENOENT) {
+		snd_error(UCM, "String error (If.Condition.%s)", key1);
+		return -EINVAL;
+	}
+
+	err = get_string(eval, key2, &string2);
+	if (err < 0 && err != -ENOENT) {
+		snd_error(UCM, "String error (If.Condition.%s)", key2);
+		return -EINVAL;
+	}
+
+	if (!string1 && !string2)
+		return -ENOENT; /* not found */
+
+	if (!string1) {
+		snd_error(UCM, "If.Condition.%s not defined", key1);
+		return -EINVAL;
+	}
+	if (!string2) {
+		snd_error(UCM, "If.Condition.%s not defined", key2);
+		return -EINVAL;
+	}
+
+	err = uc_mgr_get_substituted_value(uc_mgr, &s1, string1);
+	if (err < 0)
+		return err;
+
+	err = uc_mgr_get_substituted_value(uc_mgr, &s2, string2);
+	if (err < 0) {
+		free(s1);
+		return err;
+	}
+
+	result = compare(s1, s2);
+	free(s2);
+	free(s1);
+	return result;
+}
+
+static int string_equal(const char *s1, const char *s2)
+{
+	return strcasecmp(s1, s2) == 0;
+}
+
+static int string_contains(const char *s1, const char *s2)
+{
+	return strstr(s1, s2) != NULL;
+}
+
+static int if_eval_string(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval)
+{
+	const char *string1 = NULL;
+	char *s1;
 	int err;
 
 	if (uc_mgr->conf_format >= 3) {
 		err = get_string(eval, "Empty", &string1);
 		if (err < 0 && err != -ENOENT) {
-			uc_error("String error (If.Condition.Empty)");
+			snd_error(UCM, "String error (If.Condition.Empty)");
 			return -EINVAL;
 		}
 
@@ -61,77 +121,15 @@ static int if_eval_string(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval)
 		}
 	}
 
-	err = get_string(eval, "String1", &string1);
-	if (err < 0 && err != -ENOENT) {
-		uc_error("String error (If.Condition.String1)");
-		return -EINVAL;
-	}
-
-	err = get_string(eval, "String2", &string2);
-	if (err < 0 && err != -ENOENT) {
-		uc_error("String error (If.Condition.String2)");
-		return -EINVAL;
-	}
-
-	if (string1 || string2) {
-		if (string1 == NULL) {
-			uc_error("If.Condition.String1 not defined");
-			return -EINVAL;
-		}
-		if (string2 == NULL) {
-			uc_error("If.Condition.String2 not defined");
-			return -EINVAL;
-		}
-		err = uc_mgr_get_substituted_value(uc_mgr, &s1, string1);
-		if (err < 0)
-			return err;
-		err = uc_mgr_get_substituted_value(uc_mgr, &s2, string2);
-		if (err < 0) {
-			free(s1);
-			return err;
-		}
-		err = strcasecmp(s1, s2) == 0;
-		free(s2);
-		free(s1);
+	err = compare_strings(uc_mgr, eval, "String1", "String2", string_equal);
+	if (err != -ENOENT) /* -ENOENT means not found, continue checking */
 		return err;
-	}
 
-	err = get_string(eval, "Haystack", &string1);
-	if (err < 0 && err != -ENOENT) {
-		uc_error("String error (If.Condition.Haystack)");
-		return -EINVAL;
-	}
-
-	err = get_string(eval, "Needle", &string2);
-	if (err < 0 && err != -ENOENT) {
-		uc_error("String error (If.Condition.Needle)");
-		return -EINVAL;
-	}
-
-	if (string1 || string2) {
-		if (string1 == NULL) {
-			uc_error("If.Condition.Haystack not defined");
-			return -EINVAL;
-		}
-		if (string2 == NULL) {
-			uc_error("If.Condition.Needle not defined");
-			return -EINVAL;
-		}
-		err = uc_mgr_get_substituted_value(uc_mgr, &s1, string1);
-		if (err < 0)
-			return err;
-		err = uc_mgr_get_substituted_value(uc_mgr, &s2, string2);
-		if (err < 0) {
-			free(s1);
-			return err;
-		}
-		err = strstr(s1, s2) != NULL;
-		free(s2);
-		free(s1);
+	err = compare_strings(uc_mgr, eval, "Haystack", "Needle", string_contains);
+	if (err != -ENOENT)
 		return err;
-	}
 
-	uc_error("Unknown String condition arguments");
+	snd_error(UCM, "Unknown String condition arguments");
 	return -EINVAL;
 }
 
@@ -146,13 +144,13 @@ static int if_eval_regex_match(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval)
 
 	err = get_string(eval, "String", &string);
 	if (err < 0) {
-		uc_error("RegexMatch error (If.Condition.String)");
+		snd_error(UCM, "RegexMatch error (If.Condition.String)");
 		return -EINVAL;
 	}
 
 	err = get_string(eval, "Regex", &regex_string);
 	if (err < 0) {
-		uc_error("RegexMatch error (If.Condition.Regex)");
+		snd_error(UCM, "RegexMatch error (If.Condition.Regex)");
 		return -EINVAL;
 	}
 
@@ -161,7 +159,7 @@ static int if_eval_regex_match(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval)
 		return err;
 	err = regcomp(&re, s, options);
 	if (err) {
-		uc_error("Regex '%s' compilation failed (code %d)", s, err);
+		snd_error(UCM, "Regex '%s' compilation failed (code %d)", s, err);
 		free(s);
 		return -EINVAL;
 	}
@@ -194,19 +192,19 @@ static int if_eval_control_exists(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval
 
 	err = get_string(eval, "Device", &device);
 	if (err < 0 && err != -ENOENT) {
-		uc_error("ControlExists error (If.Condition.Device)");
+		snd_error(UCM, "ControlExists error (If.Condition.Device)");
 		return -EINVAL;
 	}
 
 	err = get_string(eval, "Control", &ctldef);
 	if (err < 0) {
-		uc_error("ControlExists error (If.Condition.Control)");
+		snd_error(UCM, "ControlExists error (If.Condition.Control)");
 		return -EINVAL;
 	}
 
 	err = get_string(eval, "ControlEnum", &enumval);
 	if (err < 0 && err != -ENOENT) {
-		uc_error("ControlExists error (If.Condition.ControlEnum)");
+		snd_error(UCM, "ControlExists error (If.Condition.ControlEnum)");
 		return -EINVAL;
 	}
 
@@ -216,14 +214,14 @@ static int if_eval_control_exists(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval
 	err = snd_ctl_ascii_elem_id_parse(elem_id, s);
 	free(s);
 	if (err < 0) {
-		uc_error("unable to parse element identificator (%s)", ctldef);
+		snd_error(UCM, "unable to parse element identificator (%s)", ctldef);
 		return -EINVAL;
 	}
 
 	if (device == NULL) {
 		ctl = uc_mgr_get_ctl(uc_mgr);
 		if (ctl == NULL) {
-			uc_error("cannot determine control device");
+			snd_error(UCM, "cannot determine control device");
 			return -EINVAL;
 		}
 	} else {
@@ -270,49 +268,142 @@ static int if_eval_control_exists(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval
 	return 1;
 }
 
+static int if_eval_integer(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval)
+{
+	const char *value1_str = NULL, *value2_str = NULL, *operation = NULL;
+	char *s1, *s2;
+	long long val1, val2;
+	int err, err1, err2;
+
+	if (uc_mgr->conf_format < 9) {
+		snd_error(UCM, "Integer condition is supported in v9+ syntax");
+		return -EINVAL;
+	}
+
+	err = get_string(eval, "Operation", &operation);
+	if (err < 0) {
+		snd_error(UCM, "Integer error (If.Condition.Operation)");
+		return -EINVAL;
+	}
+
+	err = get_string(eval, "Value1", &value1_str);
+	if (err < 0) {
+		snd_error(UCM, "Integer error (If.Condition.Value1)");
+		return -EINVAL;
+	}
+
+	err = get_string(eval, "Value2", &value2_str);
+	if (err < 0) {
+		snd_error(UCM, "Integer error (If.Condition.Value2)");
+		return -EINVAL;
+	}
+
+	err = uc_mgr_get_substituted_value(uc_mgr, &s1, value1_str);
+	if (err < 0)
+		return err;
+
+	err = uc_mgr_get_substituted_value(uc_mgr, &s2, value2_str);
+	if (err < 0) {
+		free(s1);
+		return err;
+	}
+
+	err1 = safe_strtoll(s1, &val1);
+	err2 = safe_strtoll(s2, &val2);
+
+	if (err1 < 0 || err2 < 0) {
+		if (err1 < 0)
+			snd_error(UCM, "Integer conversion error for Value1 '%s'", s1);
+		if (err2 < 0)
+			snd_error(UCM, "Integer conversion error for Value2 '%s'", s2);
+		free(s2);
+		free(s1);
+		return -EINVAL;
+	}
+
+	free(s2);
+	free(s1);
+
+	if (strcmp(operation, "==") == 0) {
+		return val1 == val2;
+	} else if (strcmp(operation, "!=") == 0) {
+		return val1 != val2;
+	} else if (strcmp(operation, "<") == 0) {
+		return val1 < val2;
+	} else if (strcmp(operation, ">") == 0) {
+		return val1 > val2;
+	} else if (strcmp(operation, "<=") == 0) {
+		return val1 <= val2;
+	} else if (strcmp(operation, ">=") == 0) {
+		return val1 >= val2;
+	} else {
+		snd_error(UCM, "Integer unknown operation '%s'", operation);
+		return -EINVAL;
+	}
+}
+
 static int if_eval_path(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval)
 {
 	const char *path, *mode = "";
 	int err, amode = F_OK;
+	char *s;
 
 	if (uc_mgr->conf_format < 4) {
-		uc_error("Path condition is supported in v4+ syntax");
+		snd_error(UCM, "Path condition is supported in v4+ syntax");
 		return -EINVAL;
 	}
 
 	err = get_string(eval, "Path", &path);
 	if (err < 0) {
-		uc_error("Path error (If.Condition.Path)");
+		snd_error(UCM, "Path error (If.Condition.Path)");
 		return -EINVAL;
 	}
 
 	err = get_string(eval, "Mode", &mode);
 	if (err < 0 && err != -ENOENT) {
-		uc_error("Path error (If.Condition.Mode)");
+		snd_error(UCM, "Path error (If.Condition.Mode)");
 		return -EINVAL;
 	}
 
-	if (strncasecmp(mode, "exist", 5) == 0) {
+	if (uc_mgr->conf_format < 7) {
+		s = (char *)mode;
+	} else {
+		err = uc_mgr_get_substituted_value(uc_mgr, &s, mode);
+		if (err < 0)
+			return err;
+	}
+	if (strncasecmp(s, "exist", 5) == 0) {
 		amode = F_OK;
-	} else if (strcasecmp(mode, "read") == 0) {
+	} else if (strcasecmp(s, "read") == 0) {
 		amode = R_OK;
-	} else if (strcasecmp(mode, "write") == 0) {
+	} else if (strcasecmp(s, "write") == 0) {
 		amode = W_OK;
-	} else if (strcasecmp(mode, "exec") == 0) {
+	} else if (strcasecmp(s, "exec") == 0) {
 		amode = X_OK;
 	} else {
-		uc_error("Path unknown mode (If.Condition.Mode)");
+		snd_error(UCM, "Path unknown mode '%s' (If.Condition.Mode)", s);
+		if (s != mode)
+			free(s);
 		return -EINVAL;
 	}
+	if (s != mode)
+		free(s);
 
+	if (uc_mgr->conf_format < 7) {
+		s = (char *)path;
+	} else {
+		err = uc_mgr_get_substituted_value(uc_mgr, &s, path);
+		if (err < 0)
+			return err;
+	}
 #ifdef HAVE_EACCESS
-	if (eaccess(path, amode))
+	err = eaccess(s, amode);
 #else
-	if (access(path, amode))
+	err = access(s, amode);
 #endif
-		return 0;
-
-	return 1;
+	if (s != path)
+		free(s);
+	return err ? 0 : 1;
 }
 
 static int if_eval(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval)
@@ -321,13 +412,13 @@ static int if_eval(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval)
 	int err;
 
 	if (snd_config_get_type(eval) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for If.Condition");
+		snd_error(UCM, "compound type expected for If.Condition");
 		return -EINVAL;
 	}
 
 	err = get_string(eval, "Type", &type);
 	if (err < 0) {
-		uc_error("type block error (If.Condition)");
+		snd_error(UCM, "type block error (If.Condition)");
 		return -EINVAL;
 	}
 
@@ -346,7 +437,10 @@ static int if_eval(snd_use_case_mgr_t *uc_mgr, snd_config_t *eval)
 	if (strcmp(type, "Path") == 0)
 		return if_eval_path(uc_mgr, eval);
 
-	uc_error("unknown If.Condition.Type");
+	if (strcmp(type, "Integer") == 0)
+		return if_eval_integer(uc_mgr, eval);
+
+	snd_error(UCM, "unknown If.Condition.Type");
 	return -EINVAL;
 }
 
@@ -354,57 +448,120 @@ static int if_eval_one(snd_use_case_mgr_t *uc_mgr,
 		       snd_config_t *cond,
 		       snd_config_t **result,
 		       snd_config_t **before,
-		       snd_config_t **after)
+		       snd_config_t **after,
+		       snd_config_t **prepend,
+		       snd_config_t **append)
 {
-	snd_config_t *expr, *_true = NULL, *_false = NULL;
-	int err;
+	snd_config_t *expr, *expr_eval = NULL, *_true = NULL, *_false = NULL;
+	const char *s;
+	char *s1;
+	int err, has_condition;
 
 	*result = NULL;
+	*prepend = NULL;
+	*append = NULL;
 
 	if (snd_config_get_type(cond) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for If.1");
+		snd_error(UCM, "compound type expected for If.1");
 		return -EINVAL;
 	}
 
-	if (snd_config_search(cond, "Condition", &expr) < 0) {
-		uc_error("condition block expected (If)");
-		return -EINVAL;
+	/* For syntax v8+, Condition is optional if Prepend or Append is present */
+	has_condition = snd_config_search(cond, "Condition", &expr) >= 0;
+
+	if (has_condition && uc_mgr->conf_format >= 9 &&
+	    snd_config_get_type(expr) == SND_CONFIG_TYPE_STRING) {
+		err = snd_config_get_string(expr, &s);
+		if (err < 0) {
+			snd_error(UCM, "Condition string error (If)");
+			return -EINVAL;
+		}
+		err = uc_mgr_get_substituted_value(uc_mgr, &s1, s);
+		if (err >= 0) {
+			err = snd_config_load_string(&expr_eval, s1, 0);
+			free(s1);
+		}
+		if (err < 0) {
+			snd_error(UCM, "Condition string parse error (If)");
+			return err;
+		}
+		expr = expr_eval;
+	}
+
+	if (uc_mgr->conf_format >= 8) {
+		/* Check for Prepend block */
+		err = snd_config_search(cond, "Prepend", prepend);
+		if (err < 0 && err != -ENOENT) {
+			snd_error(UCM, "prepend block error (If)");
+			goto __error;
+		}
+
+		/* Check for Append block */
+		err = snd_config_search(cond, "Append", append);
+		if (err < 0 && err != -ENOENT) {
+			snd_error(UCM, "append block error (If)");
+			goto __error;
+		}
+
+		/* If Prepend or Append is present, Condition can be omitted */
+		if (!has_condition && (*prepend == NULL && *append == NULL)) {
+			snd_error(UCM, "condition block expected (If)");
+			goto __error;
+		}
+	} else {
+		if (!has_condition) {
+			snd_error(UCM, "condition block expected (If)");
+			goto __error;
+		}
 	}
 
 	err = snd_config_search(cond, "True", &_true);
 	if (err < 0 && err != -ENOENT) {
-		uc_error("true block error (If)");
-		return -EINVAL;
+		snd_error(UCM, "true block error (If)");
+		goto __error;
 	}
 
 	err = snd_config_search(cond, "False", &_false);
 	if (err < 0 && err != -ENOENT) {
-		uc_error("false block error (If)");
-		return -EINVAL;
+		snd_error(UCM, "false block error (If)");
+		goto __error;
 	}
 
 	err = snd_config_search(cond, "Before", before);
 	if (err < 0 && err != -ENOENT) {
-		uc_error("before block identifier error");
-		return -EINVAL;
+		snd_error(UCM, "before block identifier error");
+		goto __error;
 	}
 
 	err = snd_config_search(cond, "After", after);
 	if (err < 0 && err != -ENOENT) {
-		uc_error("before block identifier error");
-		return -EINVAL;
+		snd_error(UCM, "before block identifier error");
+		goto __error;
 	}
 
-	err = if_eval(uc_mgr, expr);
-	if (err > 0) {
-		*result = _true;
-		return 0;
-	} else if (err == 0) {
-		*result = _false;
-		return 0;
-	} else {
-		return err;
+	/* Evaluate condition if present */
+	if (has_condition) {
+		err = if_eval(uc_mgr, expr);
+		if (err < 0)
+			goto __error;
+		if (err > 0) {
+			*result = _true;
+			goto __return;
+		} else if (err == 0) {
+			*result = _false;
+			goto __return;
+		}
 	}
+
+	/* If no condition (v8+ with Prepend/Append only), no result block */
+	return 0;
+
+__error:
+	err = -EINVAL;
+__return:
+	if (expr_eval)
+		snd_config_delete(expr_eval);
+	return err;
 }
 
 #if 0
@@ -426,34 +583,58 @@ int uc_mgr_evaluate_condition(snd_use_case_mgr_t *uc_mgr,
 			      snd_config_t *cond)
 {
 	snd_config_iterator_t i, next;
-	snd_config_t *a, *n, *before, *after;
+	snd_config_t *a, *n, *before, *after, *prepend, *append;
 	int err;
 
 	if (uc_mgr->conf_format < 2) {
-		uc_error("conditions are not supported for v1 syntax");
+		snd_error(UCM, "conditions are not supported for v1 syntax");
 		return -EINVAL;
 	}
 
 	if (snd_config_get_type(cond) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for If");
+		snd_error(UCM, "compound type expected for If");
 		return -EINVAL;
 	}
 
 	snd_config_for_each(i, next, cond) {
 		n = snd_config_iterator_entry(i);
-		before = after = NULL;
-		err = if_eval_one(uc_mgr, n, &a, &before, &after);
+		before = after = prepend = append = NULL;
+		err = if_eval_one(uc_mgr, n, &a, &before, &after, &prepend, &append);
 		if (err < 0)
 			return err;
-		if (a == NULL)
-			continue;
-		err = uc_mgr_evaluate_inplace(uc_mgr, a);
-		if (err < 0)
-			return err;
-		err = uc_mgr_config_tree_merge(uc_mgr, parent, a, before, after);
-		if (err < 0)
-			return err;
-		snd_config_delete(a);
+
+		/* For v8+: Handle Prepend block - prepend to parent before result */
+		if (prepend != NULL) {
+			err = uc_mgr_evaluate_inplace(uc_mgr, prepend);
+			if (err < 0)
+				return err;
+			err = uc_mgr_config_tree_merge(uc_mgr, parent, prepend, before, after);
+			if (err < 0)
+				return err;
+			snd_config_delete(prepend);
+		}
+
+		/* Merge the condition result (True or False block) */
+		if (a != NULL) {
+			err = uc_mgr_evaluate_inplace(uc_mgr, a);
+			if (err < 0)
+				return err;
+			err = uc_mgr_config_tree_merge(uc_mgr, parent, a, before, after);
+			if (err < 0)
+				return err;
+			snd_config_delete(a);
+		}
+
+		/* For v8+: Handle Append block - append to parent after result */
+		if (append != NULL) {
+			err = uc_mgr_evaluate_inplace(uc_mgr, append);
+			if (err < 0)
+				return err;
+			err = uc_mgr_config_tree_merge(uc_mgr, parent, append, before, after);
+			if (err < 0)
+				return err;
+			snd_config_delete(append);
+		}
 	}
 	return 0;
 }

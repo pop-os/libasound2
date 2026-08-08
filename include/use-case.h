@@ -139,7 +139,7 @@ extern "C" {
 #define SND_USE_CASE_DEV_BLUETOOTH	"Bluetooth"	/**< Bluetooth Device */
 #define SND_USE_CASE_DEV_EARPIECE	"Earpiece"	/**< Earpiece Device */
 #define SND_USE_CASE_DEV_SPDIF		"SPDIF"		/**< SPDIF Device */
-#define SND_USE_CASE_DEV_HDMI		"HDMI"		/**< HDMI Device */
+#define SND_USE_CASE_DEV_HDMI		"HDMI"		/**< HDMI / DisplayPort Device */
 #define SND_USE_CASE_DEV_USB		"USB"		/**< USB Device (multifunctional) */
 #define SND_USE_CASE_DEV_DIRECT		"Direct"	/**< Direct Device (no channel remapping), (e.g. ProAudio usage) */
 /* add new devices to end of list */
@@ -239,14 +239,14 @@ int snd_use_case_free_list(const char *list[], int items);
  *
  */
 int snd_use_case_get_list(snd_use_case_mgr_t *uc_mgr,
-                          const char *identifier,
-                          const char **list[]);
+			  const char *identifier,
+			  const char **list[]);
 
 
 /**
  * \brief Get current - string
  * \param uc_mgr Use case manager
- * \param identifier 
+ * \param identifier
  * \param value Value pointer
  * \return Zero if success, otherwise a negative error code
  *
@@ -325,10 +325,10 @@ int snd_use_case_get_list(snd_use_case_mgr_t *uc_mgr,
  *      - playback control device name
  *   - PlaybackVolume
  *      - playback control volume identifier string
- *	- can be parsed using snd_use_case_parse_ctl_elem_id()
+ *      - can be parsed using #snd_use_case_parse_ctl_elem_id()
  *   - PlaybackSwitch
  *      - playback control switch identifier string
- *	- can be parsed using snd_use_case_parse_ctl_elem_id()
+ *	    - can be parsed using #snd_use_case_parse_ctl_elem_id()
  *   - PlaybackPriority
  *      - priority value (1-10000), higher value means higher priority
  *   - CaptureRate
@@ -345,20 +345,20 @@ int snd_use_case_get_list(snd_use_case_mgr_t *uc_mgr,
  *      - capture control device name
  *   - CaptureVolume
  *      - capture control volume identifier string
- *	- can be parsed using snd_use_case_parse_ctl_elem_id()
+ *	    - can be parsed using #snd_use_case_parse_ctl_elem_id()
  *   - CaptureSwitch
  *      - capture control switch identifier string
- *	- can be parsed using snd_use_case_parse_ctl_elem_id()
+ *	    - can be parsed using #snd_use_case_parse_ctl_elem_id()
  *   - CapturePriority
  *      - priority value (1-10000), higher value means higher priority
  *   - PlaybackMixer
  *      - name of playback mixer
  *   - PlaybackMixerElem
  *      - mixer element playback identifier
- *	- can be parsed using snd_use_case_parse_selem_id()
+ *	    - can be parsed using #snd_use_case_parse_selem_id()
  *   - PlaybackMasterElem
  *      - mixer element playback identifier for the master control
- *	- can be parsed using snd_use_case_parse_selem_id()
+ *	    - can be parsed using #snd_use_case_parse_selem_id()
  *   - PlaybackMasterType
  *      - type of the master volume control
  *      - Valid values: "soft" (software attenuation)
@@ -366,13 +366,16 @@ int snd_use_case_get_list(snd_use_case_mgr_t *uc_mgr,
  *      - name of capture mixer
  *   - CaptureMixerElem
  *      - mixer element capture identifier
- *	- can be parsed using snd_use_case_parse_selem_id()
+ *	    - can be parsed using #snd_use_case_parse_selem_id()
  *   - CaptureMasterElem
  *      - mixer element playback identifier for the master control
- *	- can be parsed using snd_use_case_parse_selem_id()
+ *	    - can be parsed using #snd_use_case_parse_selem_id()
  *   - CaptureMasterType
  *      - type of the master volume control
  *      - Valid values: "soft" (software attenuation)
+ *   - CaptureMicInfoFile
+ *      - json file with the microphone array placement and type description
+ *        (e.g. output from nhlt-dmic-info)
  *   - EDIDFile
  *      - Path to EDID file for HDMI devices
  *   - JackCTL
@@ -402,19 +405,19 @@ int snd_use_case_get_list(snd_use_case_mgr_t *uc_mgr,
  *        but that's application policy configuration that doesn't belong
  *        to UCM configuration files.
  *   - MinBufferLevel
- *	- This is used on platform where reported buffer level is not accurate.
- *	  E.g. "512", which holds 512 samples in device buffer. Note: this will
- *	  increase latency.
+ *	 - This is used on platform where reported buffer level is not accurate.
+ *	   E.g. "512", which holds 512 samples in device buffer. Note: this will
+ *	   increase latency.
  */
 int snd_use_case_get(snd_use_case_mgr_t *uc_mgr,
-                     const char *identifier,
-                     const char **value);
+		     const char *identifier,
+		     const char **value);
 
 /**
  * \brief Get current - integer
  * \param uc_mgr Use case manager
- * \param identifier 
- * \param value result 
+ * \param identifier
+ * \param value result
  * \return Zero if success, otherwise a negative error code
  *
  * Known identifiers:
@@ -433,28 +436,28 @@ int snd_use_case_geti(snd_use_case_mgr_t *uc_mgr,
  * \return Zero if success, otherwise a negative error code
  *
  * Known identifiers:
- *   - _fboot			- execute the fixed boot sequence (value = NULL)
- *   - _boot			- execute the boot sequence (value = NULL)
- *				   - only when driver controls identifiers are changed
- *				     (otherwise the old control values are restored)
- *   - _defaults		- execute the 'defaults' sequence (value = NULL)
- *   - _verb			- set current verb = value
- *   - _enadev			- enable given device = value
- *   - _disdev			- disable given device = value
- *   - _swdev/{old_device}	- new_device = value
- *				  - disable old_device and then enable new_device
- *				  - if old_device is not enabled just return
- *				  - check transmit sequence firstly
- *   - _enamod			- enable given modifier = value
- *   - _dismod			- disable given modifier = value
+ *   - _fboot           - execute the fixed boot sequence (value = NULL)
+ *   - _boot            - execute the boot sequence (value = NULL)
+ *                      - only when driver controls identifiers are changed
+ *                        (otherwise the old control values are restored)
+ *   - _defaults        - execute the 'defaults' sequence (value = NULL)
+ *   - _verb            - set current verb = value
+ *   - _enadev          - enable given device = value
+ *   - _disdev          - disable given device = value
+ *   - _swdev/{old_device} - new_device = value
+ *                      - disable old_device and then enable new_device
+ *                      - if old_device is not enabled just return
+ *                      - check transmit sequence firstly
+ *   - _enamod          - enable given modifier = value
+ *   - _dismod          - disable given modifier = value
  *   - _swmod/{old_modifier}	- new_modifier = value
- *				  - disable old_modifier and then enable new_modifier
- *				  - if old_modifier is not enabled just return
- *				  - check transmit sequence firstly
+ *                      - disable old_modifier and then enable new_modifier
+ *                      - if old_modifier is not enabled just return
+ *                      - check transmit sequence firstly
  */
 int snd_use_case_set(snd_use_case_mgr_t *uc_mgr,
-                     const char *identifier,
-                     const char *value);
+		     const char *identifier,
+		     const char *value);
 
 /**
  * \brief Open and initialise use case core for sound card
@@ -479,7 +482,7 @@ int snd_use_case_set(snd_use_case_mgr_t *uc_mgr,
  * only one ALSA sound card in this case.
  */
 int snd_use_case_mgr_open(snd_use_case_mgr_t **uc_mgr,
-                          const char *card_name);
+			  const char *card_name);
 
 
 /**
@@ -531,7 +534,7 @@ static __inline__ int snd_use_case_verb_list(snd_use_case_mgr_t *uc_mgr,
 
 /**
  * \brief Parse control element identifier
- * \param elem_id Element identifier
+ * \param dst Element identifier
  * \param ucm_id Use case identifier
  * \param value String value to be parsed
  * \return Zero if success, otherwise a negative error code

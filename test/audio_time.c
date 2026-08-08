@@ -4,8 +4,11 @@
  * helpful to verify the information reported by drivers.
  */
 
+#include "config.h"
 #include <stdio.h>
+#if HAVE_MALLOC_H
 #include <malloc.h>
+#endif
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
@@ -387,7 +390,7 @@ int main(int argc, char *argv[])
 			}
 
 
-			printf("\t capture: systime: %lli nsec, audio time %lli nsec, \tsystime delta %lli \t resolution %d ns \n", 
+			printf("\t capture: systime: %lli nsec, audio time %lli nsec, \tsystime delta %lli \t resolution %d ns \n",
 				timediff(tstamp_c, trigger_tstamp_c),
 				timestamp2ns(audio_tstamp_c),
 				timediff(tstamp_c, trigger_tstamp_c) - timestamp2ns(audio_tstamp_c), audio_tstamp_report_c.accuracy

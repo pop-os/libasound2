@@ -20,6 +20,7 @@
  *
  */
 
+#include "config.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -35,6 +36,7 @@ const char *_snd_module_rawmidi_hw = "";
 #endif
 
 #define SNDRV_FILE_RAWMIDI		ALSA_DEVICE_DIRECTORY "midiC%iD%i"
+#define SNDRV_FILE_UMP_RAWMIDI		ALSA_DEVICE_DIRECTORY "umpC%iD%i"
 #define SNDRV_RAWMIDI_VERSION_MAX	SNDRV_PROTOCOL_VERSION(2, 0, 0)
 
 #ifndef DOC_HIDDEN
@@ -67,7 +69,7 @@ static int snd_rawmidi_hw_close(snd_rawmidi_t *rmidi)
 		return 0;
 	if (close(hw->fd)) {
 		err = -errno;
-		SYSERR("close failed\n");
+		snd_checknum(RAWMIDI, "close failed");
 	}
 	free(hw->buf);
 	free(hw);
@@ -80,7 +82,7 @@ static int snd_rawmidi_hw_nonblock(snd_rawmidi_t *rmidi, int nonblock)
 	long flags;
 
 	if ((flags = fcntl(hw->fd, F_GETFL)) < 0) {
-		SYSERR("F_GETFL failed");
+		snd_checknum(RAWMIDI, "F_GETFL failed");
 		return -errno;
 	}
 	if (nonblock)
@@ -88,7 +90,7 @@ static int snd_rawmidi_hw_nonblock(snd_rawmidi_t *rmidi, int nonblock)
 	else
 		flags &= ~O_NONBLOCK;
 	if (fcntl(hw->fd, F_SETFL, flags) < 0) {
-		SYSERR("F_SETFL for O_NONBLOCK failed");
+		snd_checknum(RAWMIDI, "F_SETFL for O_NONBLOCK failed");
 		return -errno;
 	}
 	return 0;
@@ -99,7 +101,7 @@ static int snd_rawmidi_hw_info(snd_rawmidi_t *rmidi, snd_rawmidi_info_t * info)
 	snd_rawmidi_hw_t *hw = rmidi->private_data;
 	info->stream = rmidi->stream;
 	if (ioctl(hw->fd, SNDRV_RAWMIDI_IOCTL_INFO, info) < 0) {
-		SYSERR("SNDRV_RAWMIDI_IOCTL_INFO failed");
+		snd_checknum(RAWMIDI, "SNDRV_RAWMIDI_IOCTL_INFO failed");
 		return -errno;
 	}
 	return 0;
@@ -111,7 +113,7 @@ static int snd_rawmidi_hw_params(snd_rawmidi_t *rmidi, snd_rawmidi_params_t * pa
 	int tstamp;
 	params->stream = rmidi->stream;
 	if (ioctl(hw->fd, SNDRV_RAWMIDI_IOCTL_PARAMS, params) < 0) {
-		SYSERR("SNDRV_RAWMIDI_IOCTL_PARAMS failed");
+		snd_checknum(RAWMIDI, "SNDRV_RAWMIDI_IOCTL_PARAMS failed");
 		return -errno;
 	}
 	buf_reset(hw);
@@ -143,7 +145,7 @@ static int snd_rawmidi_hw_status(snd_rawmidi_t *rmidi, snd_rawmidi_status_t * st
 	snd_rawmidi_hw_t *hw = rmidi->private_data;
 	status->stream = rmidi->stream;
 	if (ioctl(hw->fd, SNDRV_RAWMIDI_IOCTL_STATUS, status) < 0) {
-		SYSERR("SNDRV_RAWMIDI_IOCTL_STATUS failed");
+		snd_checknum(RAWMIDI, "SNDRV_RAWMIDI_IOCTL_STATUS failed");
 		return -errno;
 	}
 	return 0;
@@ -154,7 +156,7 @@ static int snd_rawmidi_hw_drop(snd_rawmidi_t *rmidi)
 	snd_rawmidi_hw_t *hw = rmidi->private_data;
 	int str = rmidi->stream;
 	if (ioctl(hw->fd, SNDRV_RAWMIDI_IOCTL_DROP, &str) < 0) {
-		SYSERR("SNDRV_RAWMIDI_IOCTL_DROP failed");
+		snd_checknum(RAWMIDI, "SNDRV_RAWMIDI_IOCTL_DROP failed");
 		return -errno;
 	}
 	buf_reset(hw);
@@ -166,7 +168,7 @@ static int snd_rawmidi_hw_drain(snd_rawmidi_t *rmidi)
 	snd_rawmidi_hw_t *hw = rmidi->private_data;
 	int str = rmidi->stream;
 	if (ioctl(hw->fd, SNDRV_RAWMIDI_IOCTL_DRAIN, &str) < 0) {
-		SYSERR("SNDRV_RAWMIDI_IOCTL_DRAIN failed");
+		snd_checknum(RAWMIDI, "SNDRV_RAWMIDI_IOCTL_DRAIN failed");
 		return -errno;
 	}
 	return 0;
@@ -272,6 +274,28 @@ static ssize_t snd_rawmidi_hw_tread(snd_rawmidi_t *rmidi, struct timespec *tstam
 	return ret + result;
 }
 
+static int snd_rawmidi_hw_ump_endpoint_info(snd_rawmidi_t *rmidi, void *buf)
+{
+	snd_rawmidi_hw_t *hw = rmidi->private_data;
+
+	if (rmidi->version < SNDRV_PROTOCOL_VERSION(2, 0, 3))
+		return -ENXIO;
+	if (ioctl(hw->fd, SNDRV_UMP_IOCTL_ENDPOINT_INFO, buf) < 0)
+		return -errno;
+	return 0;
+}
+
+static int snd_rawmidi_hw_ump_block_info(snd_rawmidi_t *rmidi, void *buf)
+{
+	snd_rawmidi_hw_t *hw = rmidi->private_data;
+
+	if (rmidi->version < SNDRV_PROTOCOL_VERSION(2, 0, 3))
+		return -ENXIO;
+	if (ioctl(hw->fd, SNDRV_UMP_IOCTL_BLOCK_INFO, buf) < 0)
+		return -errno;
+	return 0;
+}
+
 static const snd_rawmidi_ops_t snd_rawmidi_hw_ops = {
 	.close = snd_rawmidi_hw_close,
 	.nonblock = snd_rawmidi_hw_nonblock,
@@ -282,7 +306,9 @@ static const snd_rawmidi_ops_t snd_rawmidi_hw_ops = {
 	.drain = snd_rawmidi_hw_drain,
 	.write = snd_rawmidi_hw_write,
 	.read = snd_rawmidi_hw_read,
-	.tread = snd_rawmidi_hw_tread
+	.tread = snd_rawmidi_hw_tread,
+	.ump_endpoint_info = snd_rawmidi_hw_ump_endpoint_info,
+	.ump_block_info = snd_rawmidi_hw_ump_block_info,
 };
 
 
@@ -297,7 +323,11 @@ int snd_rawmidi_hw_open(snd_rawmidi_t **inputp, snd_rawmidi_t **outputp,
 	snd_rawmidi_t *rmidi;
 	snd_rawmidi_hw_t *hw = NULL;
 	snd_rawmidi_info_t info;
+	int is_ump;
 	int fmode;
+
+	is_ump = !!(mode & _SND_RAWMIDI_OPEN_UMP);
+	mode &= ~_SND_RAWMIDI_OPEN_UMP;
 
 	if (inputp)
 		*inputp = NULL;
@@ -305,17 +335,20 @@ int snd_rawmidi_hw_open(snd_rawmidi_t **inputp, snd_rawmidi_t **outputp,
 		*outputp = NULL;
 	if (!inputp && !outputp)
 		return -EINVAL;
-	
+
 	if ((ret = snd_ctl_hw_open(&ctl, NULL, card, 0)) < 0)
 		return ret;
-	sprintf(filename, SNDRV_FILE_RAWMIDI, card, device);
+	if (is_ump)
+		sprintf(filename, SNDRV_FILE_UMP_RAWMIDI, card, device);
+	else
+		sprintf(filename, SNDRV_FILE_RAWMIDI, card, device);
 
       __again:
-      	if (attempt++ > 3) {
-      		snd_ctl_close(ctl);
-      		return -EBUSY;
-      	}
-      	ret = snd_ctl_rawmidi_prefer_subdevice(ctl, subdevice);
+	if (attempt++ > 3) {
+		snd_ctl_close(ctl);
+		return -EBUSY;
+	}
+	ret = snd_ctl_rawmidi_prefer_subdevice(ctl, subdevice);
 	if (ret < 0) {
 		snd_ctl_close(ctl);
 		return ret;
@@ -336,7 +369,7 @@ int snd_rawmidi_hw_open(snd_rawmidi_t **inputp, snd_rawmidi_t **outputp,
 	if (mode & SND_RAWMIDI_NONBLOCK) {
 		fmode |= O_NONBLOCK;
 	}
-	
+
 	if (mode & SND_RAWMIDI_SYNC) {
 		fmode |= O_SYNC;
 	}
@@ -349,13 +382,13 @@ int snd_rawmidi_hw_open(snd_rawmidi_t **inputp, snd_rawmidi_t **outputp,
 		fd = snd_open_device(filename, fmode);
 		if (fd < 0) {
 			snd_ctl_close(ctl);
-			SYSERR("open %s failed", filename);
+			snd_checknum(RAWMIDI, "open %s failed", filename);
 			return -errno;
 		}
 	}
 	if (ioctl(fd, SNDRV_RAWMIDI_IOCTL_PVERSION, &ver) < 0) {
 		ret = -errno;
-		SYSERR("SNDRV_RAWMIDI_IOCTL_PVERSION failed");
+		snd_checknum(RAWMIDI, "SNDRV_RAWMIDI_IOCTL_PVERSION failed");
 		close(fd);
 		snd_ctl_close(ctl);
 		return ret;
@@ -374,7 +407,7 @@ int snd_rawmidi_hw_open(snd_rawmidi_t **inputp, snd_rawmidi_t **outputp,
 		memset(&info, 0, sizeof(info));
 		info.stream = outputp ? SNDRV_RAWMIDI_STREAM_OUTPUT : SNDRV_RAWMIDI_STREAM_INPUT;
 		if (ioctl(fd, SNDRV_RAWMIDI_IOCTL_INFO, &info) < 0) {
-			SYSERR("SNDRV_RAWMIDI_IOCTL_INFO failed");
+			snd_checknum(RAWMIDI, "SNDRV_RAWMIDI_IOCTL_INFO failed");
 			ret = -errno;
 			close(fd);
 			snd_ctl_close(ctl);

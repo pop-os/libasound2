@@ -1,6 +1,6 @@
 dnl Process this file with autoconf to produce a configure script.
-AC_PREREQ(2.59)
-AC_INIT(alsa-lib, 1.2.8)
+AC_PREREQ([2.72])
+AC_INIT([alsa-lib], [1.2.17pre1])
 
 AC_CONFIG_SRCDIR([src/control/control.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -33,24 +33,31 @@ AC_USE_SYSTEM_EXTENSIONS
 AC_PROG_INSTALL
 AC_PROG_LN_S 
 AC_DISABLE_STATIC
-AC_LIBTOOL_DLOPEN
-AM_PROG_LIBTOOL
+_LT_SET_OPTION([LT_INIT],[dlopen])
+LT_INIT
 
 CC_NOUNDEFINED
 
 dnl Checks for header files.
-AC_HEADER_STDC
+AC_CHECK_INCLUDES_DEFAULT
+AC_PROG_EGREP
+
 AC_CONFIG_HEADERS(include/config.h)
 
 dnl Checks for typedefs, structures, and compiler characteristics.
 AC_C_CONST
 AC_C_INLINE
-AC_HEADER_TIME
+AC_CHECK_HEADERS_ONCE([sys/time.h])
+
+AC_CHECK_ATTRIBUTE_SYMVER
 
 dnl Checks for library functions.
-AC_PROG_GCC_TRADITIONAL
 AC_CHECK_FUNCS([uselocale])
 AC_CHECK_FUNCS([eaccess])
+AC_CHECK_DECLS([closefrom])
+
+dnl Enable largefile support
+AC_SYS_LARGEFILE
 
 SAVE_LIBRARY_VERSION
 AC_SUBST(LIBTOOL_VERSION_INFO)
@@ -63,6 +70,15 @@ cat <<EOF
   Please, do not try to compile static and shared libraries together.
   See INSTALL file for more details (do not use --enable-shared=yes with
   --enable-static=yes).
+EOF
+  exit 1
+fi
+
+dnl Do not use --with-pic for shared libraries (consider to use PIE)
+if test "$enable_static" = "yes" -a "$pic_mode" = "yes"; then
+cat <<EOF
+  Please, do not enable PIC (--with-pic) for static library. Consider
+  to remove this option or use PIE flags.
 EOF
   exit 1
 fi
@@ -237,10 +253,7 @@ fi
 
 dnl Check for scandir64
 AC_MSG_CHECKING(for LFS calls)
-AC_TRY_LINK([#include <dirent.h>],
-    [struct dirent64 a; ],
-    [have_lfs=yes],
-    [have_lfs=no])
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <dirent.h>]], [[struct dirent64 a; ]])],[have_lfs=yes],[have_lfs=no])
 if test "$have_lfs" = "yes"; then
   AC_MSG_RESULT(yes)
   AC_DEFINE([HAVE_LFS], 1, [Have LFS])
@@ -255,9 +268,8 @@ AC_ARG_WITH(libdl,
   [ have_libdl="$withval" ], [ have_libdl="yes" ])
 HAVE_LIBDL=
 if test "$have_libdl" = "yes"; then
-  AC_CHECK_LIB([dl], [dlsym], [HAVE_LIBDL="yes"])
+  AC_SEARCH_LIBS([dlsym], [dl], [HAVE_LIBDL="yes"])
   if test "$HAVE_LIBDL" = "yes" ; then
-    ALSA_DEPLIBS="$ALSA_DEPLIBS -ldl"
     AC_DEFINE([HAVE_LIBDL], 1, [Have libdl])
   fi
 else
@@ -345,7 +357,7 @@ AC_ARG_ENABLE(resmgr,
 AC_MSG_RESULT($resmgr)
 if test "$resmgr" = "yes"; then
   AC_CHECK_LIB(resmgr, rsm_open_device,,
-    AC_ERROR([Cannot find libresmgr]))
+    AC_MSG_ERROR(Cannot find libresmgr))
   AC_DEFINE(SUPPORT_RESMGR, "1", [Support resmgr with alsa-lib])
 fi
 
@@ -407,10 +419,6 @@ AC_ARG_ENABLE(ucm,
 AC_ARG_ENABLE(topology,
   AS_HELP_STRING([--disable-topology], [disable the DSP topology component]),
   [build_topology="$enableval"], [build_topology="yes"])
-AC_ARG_ENABLE(alisp,
-  AS_HELP_STRING([--enable-alisp], [enable the alisp component]),
-  [build_alisp="$enableval"], [build_alisp="no"])
-test "$softfloat" = "yes" && build_alisp="no"
 AC_ARG_ENABLE(old-symbols,
   AS_HELP_STRING([--disable-old-symbols], [disable old obsoleted symbols]),
   [keep_old_symbols="$enableval"], [keep_old_symbols="yes"])
@@ -471,6 +479,12 @@ fi
 AC_SUBST(PYTHON_LIBS)
 AC_SUBST(PYTHON_INCLUDES)
 
+if test "$build_rawmidi" != "yes"; then
+  if test "$build_seq" = "yes"; then
+    AC_MSG_ERROR(Cannot enable sequencer without rawmidi)
+  fi
+fi
+
 AM_CONDITIONAL([BUILD_MIXER], [test x$build_mixer = xyes])
 AM_CONDITIONAL([BUILD_PCM], [test x$build_pcm = xyes])
 AM_CONDITIONAL([BUILD_RAWMIDI], [test x$build_rawmidi = xyes])
@@ -478,7 +492,6 @@ AM_CONDITIONAL([BUILD_HWDEP], [test x$build_hwdep = xyes])
 AM_CONDITIONAL([BUILD_SEQ], [test x$build_seq = xyes])
 AM_CONDITIONAL([BUILD_UCM], [test x$build_ucm = xyes])
 AM_CONDITIONAL([BUILD_TOPOLOGY], [test x$build_topology = xyes])
-AM_CONDITIONAL([BUILD_ALISP], [test x$build_alisp = xyes])
 AM_CONDITIONAL([BUILD_MIXER_MODULES], [test x$build_mixer_modules = xyes])
 AM_CONDITIONAL([BUILD_MIXER_PYMODULES], [test x$build_mixer_pymodules = xyes])
 
@@ -520,22 +533,16 @@ dnl check atomics for pcm_meter
 AC_MSG_CHECKING([whether GCC supports builtin atomic intrinsics])
 if test -z "$gcc_have_atomics"; then
   gcc_have_atomics=no
-  AC_TRY_LINK([],
-    [int i;
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[int i;
      __atomic_load_n(&i, __ATOMIC_SEQ_CST);
      __atomic_add_fetch(&i, 0, __ATOMIC_SEQ_CST);
-    ],
-    [gcc_have_atomics=yes],
-    [gcc_have_atomics=no])
+    ]])],[gcc_have_atomics=yes],[gcc_have_atomics=no])
 fi
 AC_MSG_RESULT($gcc_have_atomics)
 
 dnl check mmx register for pcm_dmix_i386
 
-AC_TRY_LINK([],
-    [__asm__ volatile ("" : : : "mm0");],
-    [AC_DEFINE([HAVE_MMX], "1", [MMX technology is enabled])],
-    [])
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[__asm__ volatile ("" : : : "mm0");]])],[AC_DEFINE([HAVE_MMX], "1", [MMX technology is enabled])],[])
 
 PCM_PLUGIN_LIST="copy linear route mulaw alaw adpcm rate plug multi shm file null empty share meter hooks lfloat ladspa dmix dshare dsnoop asym iec958 softvol extplug ioplug mmap_emul"
 
@@ -616,6 +623,7 @@ AM_CONDITIONAL([BUILD_PCM_PLUGIN_DSNOOP], [test x$build_pcm_dsnoop = xyes])
 AM_CONDITIONAL([BUILD_PCM_PLUGIN_ASYM], [test x$build_pcm_asym = xyes])
 AM_CONDITIONAL([BUILD_PCM_PLUGIN_IEC958], [test x$build_pcm_iec958 = xyes])
 AM_CONDITIONAL([BUILD_PCM_PLUGIN_SOFTVOL], [test x$build_pcm_softvol = xyes])
+AM_CONDITIONAL([BUILD_PCM_PLUGIN_EXTERNAL], [test x$build_pcm_extplug = xyes -o x$build_pcm_ioplug = xyes])
 AM_CONDITIONAL([BUILD_PCM_PLUGIN_EXTPLUG], [test x$build_pcm_extplug = xyes])
 AM_CONDITIONAL([BUILD_PCM_PLUGIN_IOPLUG], [test x$build_pcm_ioplug = xyes])
 AM_CONDITIONAL([BUILD_PCM_PLUGIN_MMAP_EMUL], [test x$build_pcm_mmap_emul = xyes])
@@ -638,6 +646,9 @@ if test "$build_pcm_mulaw" = "yes"; then
 fi
 if test "$build_pcm_alaw" = "yes"; then
   AC_DEFINE([BUILD_PCM_PLUGIN_ALAW], "1", [Build PCM alaw plugin])
+fi
+if test "$build_pcm_iec958" = "yes"; then
+  AC_DEFINE([BUILD_PCM_PLUGIN_IEC958], "1", [Build PCM iec958 plugin])
 fi
 if test "$build_pcm_mmap_emul" = "yes"; then
   AC_DEFINE([BUILD_PCM_PLUGIN_MMAP_EMUL], "1", [Build PCM mmap-emul plugin])
@@ -716,9 +727,9 @@ AC_ARG_WITH(max-cards,
 AC_MSG_RESULT([$max_cards])
 
 if test "$max_cards" -lt 1; then
-   AC_ERROR([Invalid max cards $max_cards])
+   AC_MSG_ERROR(Invalid max cards $max_cards)
 elif test "$max_cards" -gt 256; then
-   AC_ERROR([Invalid max cards $max_cards])
+   AC_MSG_ERROR(Invalid max cards $max_cards)
 fi
 AC_DEFINE_UNQUOTED(SND_MAX_CARDS, $max_cards, [Max number of cards])
 
@@ -744,22 +755,24 @@ if test ! -L "$srcdir"/include/alsa ; then
   ln -sf . "$srcdir"/include/alsa
 fi
 
-AC_OUTPUT(Makefile doc/Makefile doc/pictures/Makefile doc/doxygen.cfg \
-	  include/Makefile include/sound/Makefile include/sound/uapi/Makefile \
-	  src/Versions src/Makefile \
-          src/control/Makefile src/mixer/Makefile \
-	  src/pcm/Makefile src/pcm/scopes/Makefile \
-	  src/rawmidi/Makefile src/timer/Makefile \
-          src/hwdep/Makefile src/seq/Makefile src/ucm/Makefile \
-          src/alisp/Makefile src/topology/Makefile \
-	  src/conf/Makefile \
-	  src/conf/cards/Makefile \
-	  src/conf/ctl/Makefile \
-	  src/conf/pcm/Makefile \
-	  modules/Makefile modules/mixer/Makefile modules/mixer/simple/Makefile \
-	  alsalisp/Makefile aserver/Makefile \
-	  test/Makefile test/lsb/Makefile \
-	  utils/Makefile utils/alsa-lib.spec utils/alsa.pc utils/alsa-topology.pc)
+AC_CONFIG_FILES(Makefile doc/Makefile doc/pictures/Makefile doc/doxygen.cfg \
+		include/Makefile include/sound/Makefile include/sound/uapi/Makefile \
+		src/Versions.in src/Makefile \
+		src/control/Makefile src/mixer/Makefile \
+		src/pcm/Makefile src/pcm/scopes/Makefile \
+		src/rawmidi/Makefile src/timer/Makefile \
+		src/hwdep/Makefile src/seq/Makefile src/ucm/Makefile \
+		src/topology/Makefile \
+		src/conf/Makefile \
+		src/conf/cards/Makefile \
+		src/conf/ctl/Makefile \
+		src/conf/pcm/Makefile \
+		modules/Makefile modules/mixer/Makefile modules/mixer/simple/Makefile \
+		aserver/Makefile \
+		test/Makefile test/lsb/Makefile \
+		utils/Makefile utils/alsa-lib.spec utils/alsa.pc utils/alsa-topology.pc)
+
+AC_OUTPUT
 
 dnl Create asoundlib.h dynamically according to configure options
 echo "Creating asoundlib.h..."
@@ -782,9 +795,11 @@ EOF
 fi
 cat >> include/asoundlib.h <<EOF
 
+#ifndef DOC_HIDDEN
 #ifndef __GNUC__
 #define __inline__ inline
 #endif
+#endif /* DOC_HIDDEN */
 
 #include <alsa/asoundef.h>
 #include <alsa/version.h>
@@ -796,10 +811,12 @@ cat >> include/asoundlib.h <<EOF
 EOF
 test "$build_pcm" = "yes" && echo "#include <alsa/pcm.h>" >> include/asoundlib.h
 test "$build_rawmidi" = "yes" && echo "#include <alsa/rawmidi.h>" >> include/asoundlib.h
+test "$build_rawmidi" = "yes" && echo "#include <alsa/ump.h>" >> include/asoundlib.h
 test "$build_pcm" = "yes" && echo "#include <alsa/timer.h>" >> include/asoundlib.h
 test "$build_hwdep" = "yes" && echo "#include <alsa/hwdep.h>" >> include/asoundlib.h
 echo "#include <alsa/control.h>" >> include/asoundlib.h
 test "$build_mixer" = "yes" && echo "#include <alsa/mixer.h>" >> include/asoundlib.h
+test "$build_seq" = "yes" && echo "#include <alsa/ump_msg.h>" >> include/asoundlib.h
 test "$build_seq" = "yes" && echo "#include <alsa/seq_event.h>" >> include/asoundlib.h
 test "$build_seq" = "yes" && echo "#include <alsa/seq.h>" >> include/asoundlib.h
 test "$build_seq" = "yes" && echo "#include <alsa/seqmid.h>" >> include/asoundlib.h

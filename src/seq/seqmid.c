@@ -20,14 +20,12 @@
  *
  */
 
-#include <stdio.h>
-#include <stdlib.h>
+#include "seq_local.h"
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
 #include <ctype.h>
 #include <sys/ioctl.h>
-#include "seq_local.h"
 
 /**
  * \brief queue controls - start/stop/continue
@@ -121,7 +119,7 @@ int snd_seq_delete_simple_port(snd_seq_t *seq, int port)
 int snd_seq_connect_from(snd_seq_t *seq, int myport, int src_client, int src_port)
 {
 	snd_seq_port_subscribe_t subs;
-	
+
 	memset(&subs, 0, sizeof(subs));
 	subs.sender.client = src_client;
 	subs.sender.port = src_port;
@@ -148,7 +146,7 @@ int snd_seq_connect_from(snd_seq_t *seq, int myport, int src_client, int src_por
 int snd_seq_connect_to(snd_seq_t *seq, int myport, int dest_client, int dest_port)
 {
 	snd_seq_port_subscribe_t subs;
-	
+
 	memset(&subs, 0, sizeof(subs));
 	/*subs.sender.client = seq->client;*/
 	subs.sender.client = snd_seq_client_id(seq);
@@ -175,7 +173,7 @@ int snd_seq_connect_to(snd_seq_t *seq, int myport, int dest_client, int dest_por
 int snd_seq_disconnect_from(snd_seq_t *seq, int myport, int src_client, int src_port)
 {
 	snd_seq_port_subscribe_t subs;
-	
+
 	memset(&subs, 0, sizeof(subs));
 	subs.sender.client = src_client;
 	subs.sender.port = src_port;
@@ -202,7 +200,7 @@ int snd_seq_disconnect_from(snd_seq_t *seq, int myport, int src_client, int src_
 int snd_seq_disconnect_to(snd_seq_t *seq, int myport, int dest_client, int dest_port)
 {
 	snd_seq_port_subscribe_t subs;
-	
+
 	memset(&subs, 0, sizeof(subs));
 	/*subs.sender.client = seq->client;*/
 	subs.sender.client = snd_seq_client_id(seq);
@@ -252,6 +250,44 @@ int snd_seq_set_client_event_filter(snd_seq_t *seq, int event_type)
 	if ((err = snd_seq_get_client_info(seq, &info)) < 0)
 		return err;
 	snd_seq_client_info_event_filter_add(&info, event_type);
+	return snd_seq_set_client_info(seq, &info);
+}
+
+/**
+ * \brief set client MIDI protocol version
+ * \param seq sequencer handle
+ * \param midi_version MIDI protocol version to set
+ * \return 0 on success or negative error code
+ *
+ * \sa snd_seq_set_client_info()
+ */
+int snd_seq_set_client_midi_version(snd_seq_t *seq, int midi_version)
+{
+	snd_seq_client_info_t info;
+	int err;
+
+	if ((err = snd_seq_get_client_info(seq, &info)) < 0)
+		return err;
+	snd_seq_client_info_set_midi_version(&info, midi_version);
+	return snd_seq_set_client_info(seq, &info);
+}
+
+/**
+ * \brief enable/disable client's automatic conversion of UMP/legacy events
+ * \param seq sequencer handle
+ * \param enable 0 or 1 to disable/enable the conversion
+ * \return 0 on success or negative error code
+ *
+ * \sa snd_seq_set_client_info()
+ */
+int snd_seq_set_client_ump_conversion(snd_seq_t *seq, int enable)
+{
+	snd_seq_client_info_t info;
+	int err;
+
+	if ((err = snd_seq_get_client_info(seq, &info)) < 0)
+		return err;
+	snd_seq_client_info_set_ump_conversion(&info, enable);
 	return snd_seq_set_client_info(seq, &info);
 }
 
@@ -364,7 +400,7 @@ int snd_seq_sync_output_queue(snd_seq_t *seq)
 	pfd.fd = seq->poll_fd;
 	pfd.events = POLLOUT;
 	err = poll(&pfd, 1, -1);
-	/* restore the room size */ 
+	/* restore the room size */
 	info.output_room = saved_room;
 	snd_seq_set_client_pool(seq, &info);
 	return err;
@@ -388,8 +424,8 @@ int snd_seq_sync_output_queue(snd_seq_t *seq)
  */
 int snd_seq_parse_address(snd_seq_t *seq, snd_seq_addr_t *addr, const char *arg)
 {
-	char *p, *buf;
-	const char *s;
+	char *buf;
+	const char *p, *s;
 	char c;
 	long client, port = 0;
 	int len;
@@ -440,6 +476,8 @@ int snd_seq_parse_address(snd_seq_t *seq, snd_seq_addr_t *addr, const char *arg)
 			if (!strncmp(arg, cinfo.name, len)) {
 				if (strlen(cinfo.name) == (size_t)len) {
 					/* exact match */
+					if (cinfo.client < 0)
+						return -EIO;
 					addr->client = cinfo.client;
 					return 0;
 				}
@@ -457,3 +495,244 @@ int snd_seq_parse_address(snd_seq_t *seq, snd_seq_addr_t *addr, const char *arg)
 	return 0;
 }
 
+/**
+ * \brief create a UMP Endpoint for the given sequencer client
+ * \param seq sequencer handle
+ * \param info UMP Endpoint information to initialize
+ * \param num_groups max number of groups in the endpoint
+ * \return 0 on success or negative error code
+ *
+ * This function initializes the sequencer client to the corresponding
+ * MIDI 2.0 mode (either MIDI 1.0 or MIDI 2.0 protocol) depending on the
+ * given snd_ump_endpoint_info_t info.
+ *
+ * This function should be called right after opening a sequencer client.
+ * The client name is updated from the UMP Endpoint name, and a primary
+ * MIDI 2.0 UMP port and each UMP Group port are created.
+ * The application should pass each UMP block info via succeeding
+ * snd_seq_create_ump_block() call.
+ */
+int snd_seq_create_ump_endpoint(snd_seq_t *seq,
+				const snd_ump_endpoint_info_t *info,
+				unsigned int num_groups)
+{
+	int err, version;
+	unsigned int i;
+	snd_seq_port_info_t *pinfo;
+
+	if (seq->ump_ep)
+		return -EBUSY;
+
+	if (num_groups < 1 || num_groups > SND_UMP_MAX_GROUPS)
+		return -EINVAL;
+
+	if (!(info->protocol_caps & info->protocol)) {
+		snd_error(SEQUENCER, "Inconsistent UMP protocol_caps and protocol\n");
+		return -EINVAL;
+	}
+
+	if (info->protocol & SND_UMP_EP_INFO_PROTO_MIDI2) {
+		version = SND_SEQ_CLIENT_UMP_MIDI_2_0;
+	} else if (info->protocol & SND_UMP_EP_INFO_PROTO_MIDI1) {
+		version = SND_SEQ_CLIENT_UMP_MIDI_1_0;
+	} else {
+		snd_error(SEQUENCER, "Invalid UMP protocol set 0x%x\n", info->protocol);
+		return -EINVAL;
+	}
+
+	err = snd_seq_set_client_midi_version(seq, version);
+	if (err < 0) {
+		snd_error(SEQUENCER, "Failed to set to MIDI protocol 0x%x\n", version);
+		return err;
+	}
+
+	seq->ump_ep = malloc(sizeof(*info));
+	if (!seq->ump_ep)
+		return -ENOMEM;
+
+	*seq->ump_ep = *info;
+	if (!seq->ump_ep->version)
+		seq->ump_ep->version = SND_UMP_EP_INFO_DEFAULT_VERSION;
+
+	if (info->name[0]) {
+		err = snd_seq_set_client_name(seq, (const char *)info->name);
+		if (err < 0)
+			goto error_free;
+	}
+
+	err = snd_seq_set_ump_endpoint_info(seq, seq->ump_ep);
+	if (err < 0) {
+		snd_error(SEQUENCER, "Failed to set UMP EP info\n");
+		goto error_free;
+	}
+
+	snd_seq_port_info_alloca(&pinfo);
+
+	snd_seq_port_info_set_port(pinfo, 0);
+	snd_seq_port_info_set_port_specified(pinfo, 1);
+	snd_seq_port_info_set_name(pinfo, "MIDI 2.0");
+	snd_seq_port_info_set_capability(pinfo,
+					 SND_SEQ_PORT_CAP_UMP_ENDPOINT |
+					 SND_SEQ_PORT_CAP_READ |
+					 SND_SEQ_PORT_CAP_SYNC_READ |
+					 SND_SEQ_PORT_CAP_SUBS_READ |
+					 SND_SEQ_PORT_CAP_WRITE |
+					 SND_SEQ_PORT_CAP_SYNC_WRITE |
+					 SND_SEQ_PORT_CAP_SUBS_WRITE |
+					 SND_SEQ_PORT_CAP_DUPLEX);
+	snd_seq_port_info_set_type(pinfo,
+				   SND_SEQ_PORT_TYPE_MIDI_GENERIC |
+				   SND_SEQ_PORT_TYPE_MIDI_UMP |
+				   SND_SEQ_PORT_TYPE_APPLICATION |
+				   SND_SEQ_PORT_TYPE_PORT);
+	snd_seq_port_info_set_ump_group(pinfo, 0);
+	err = snd_seq_create_port(seq, pinfo);
+	if (err < 0) {
+		snd_error(SEQUENCER, "Failed to create MIDI 2.0 port\n");
+		goto error_free;
+	}
+
+	for (i = 0; i < num_groups; i++) {
+		char name[32];
+
+		snd_seq_port_info_set_port(pinfo, i + 1);
+		snd_seq_port_info_set_port_specified(pinfo, 1);
+		sprintf(name, "Group %d", i + 1);
+		snd_seq_port_info_set_capability(pinfo, 0); /* set later */
+		snd_seq_port_info_set_name(pinfo, name);
+		snd_seq_port_info_set_ump_group(pinfo, i + 1);
+		err = snd_seq_create_port(seq, pinfo);
+		if (err < 0) {
+			snd_error(SEQUENCER, "Failed to create Group port %d\n", i + 1);
+			goto error;
+		}
+	}
+
+	seq->num_ump_groups = num_groups;
+	return 0;
+
+ error:
+	/* delete all ports including port 0 */
+	for (i = 0; i <= num_groups; i++)
+		snd_seq_delete_port(seq, i);
+ error_free:
+	free(seq->ump_ep);
+	seq->ump_ep = NULL;
+	return err;
+}
+
+/* update each port name and capability from the block list */
+static void update_group_ports(snd_seq_t *seq, snd_ump_endpoint_info_t *ep)
+{
+	unsigned int i, b;
+	snd_seq_port_info_t *pinfo;
+	snd_ump_block_info_t *bp;
+
+	snd_seq_port_info_alloca(&pinfo);
+
+	for (i = 0; i < seq->num_ump_groups; i++) {
+		char blknames[64];
+		char name[64];
+		unsigned int caps = 0;
+
+		blknames[0] = 0;
+		for (b = 0; b < ep->num_blocks; b++) {
+			bp = seq->ump_blks[b];
+			if (!bp)
+				continue;
+			if (i < bp->first_group ||
+			    i >= bp->first_group + bp->num_groups)
+				continue;
+			switch (bp->direction) {
+			case SND_UMP_DIR_INPUT: /* sink, receiver */
+				caps |= SND_SEQ_PORT_CAP_WRITE |
+					SND_SEQ_PORT_CAP_SYNC_WRITE |
+					SND_SEQ_PORT_CAP_SUBS_WRITE;
+				break;
+			case SND_UMP_DIR_OUTPUT: /* source, transmitter */
+				caps |= SND_SEQ_PORT_CAP_READ |
+					SND_SEQ_PORT_CAP_SYNC_READ |
+					SND_SEQ_PORT_CAP_SUBS_READ;
+				break;
+			case SND_UMP_DIR_BIDIRECTION:
+				caps |= SND_SEQ_PORT_CAP_READ |
+					SND_SEQ_PORT_CAP_SYNC_READ |
+					SND_SEQ_PORT_CAP_SUBS_READ |
+					SND_SEQ_PORT_CAP_WRITE |
+					SND_SEQ_PORT_CAP_SYNC_WRITE |
+					SND_SEQ_PORT_CAP_SUBS_WRITE |
+					SND_SEQ_PORT_CAP_DUPLEX;
+				break;
+			}
+
+			if (bp->name[0] == '\0')
+				continue;
+			if (blknames[0])
+				snd_strlcat(blknames, ", ", sizeof(blknames));
+			snd_strlcat(blknames, (const char *)bp->name, sizeof(blknames));
+		}
+
+		if (!*blknames)
+			continue;
+
+		snprintf(name, sizeof(name), "Group %d (%s)", i + 1, blknames);
+		if (snd_seq_get_port_info(seq, i + 1, pinfo) < 0)
+			continue;
+
+		if (strcmp(name, snd_seq_port_info_get_name(pinfo)) ||
+		    snd_seq_port_info_get_capability(pinfo) != caps) {
+			snd_seq_port_info_set_name(pinfo, name);
+			snd_seq_port_info_set_capability(pinfo, caps);
+			snd_seq_set_port_info(seq, i + 1, pinfo);
+		}
+	}
+}
+
+/**
+ * \brief create a UMP block for the given sequencer client
+ * \param seq sequencer handle
+ * \param blkid 0-based block id
+ * \param info UMP block info to initialize
+ * \return 0 on success or negative error code
+ *
+ * This function sets up the UMP block info of the given block id.
+ * The sequencer port name is updated accordingly with the associated
+ * block name automatically.
+ */
+int snd_seq_create_ump_block(snd_seq_t *seq, int blkid,
+			     const snd_ump_block_info_t *info)
+{
+	snd_ump_block_info_t *bp;
+	snd_ump_endpoint_info_t *ep = seq->ump_ep;
+	int err;
+
+	if (!ep)
+		return -EINVAL;
+	if (info->first_group >= seq->num_ump_groups ||
+	    info->first_group + info->num_groups > seq->num_ump_groups)
+		return -EINVAL;
+	if (blkid < 0 || blkid >= (int)ep->num_blocks)
+		return -EINVAL;
+
+	if (seq->ump_blks[blkid])
+		return -EBUSY;
+	seq->ump_blks[blkid] = bp = malloc(sizeof(*info));
+	if (!bp)
+		return -ENOMEM;
+	*bp = *info;
+
+	if (!bp->midi_ci_version)
+		bp->midi_ci_version = SND_UMP_BLOCK_INFO_DEFAULT_MIDI_CI_VERSION;
+	bp->active = 1;
+
+	err = snd_seq_set_ump_block_info(seq, blkid, bp);
+	if (err < 0) {
+		snd_error(SEQUENCER, "Failed to set UMP EP info\n");
+		free(bp);
+		seq->ump_blks[blkid] = NULL;
+		return err;
+	}
+
+	update_group_ports(seq, ep);
+	return 0;
+}

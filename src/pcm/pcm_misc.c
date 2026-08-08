@@ -18,13 +18,13 @@
  *   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
-  
+
+#include "pcm_local.h"
+#include "bswap.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include "bswap.h"
-#include "pcm_local.h"
 
 
 /**
@@ -203,9 +203,9 @@ int snd_pcm_format_cpu_endian(snd_pcm_format_t format)
 }
 
 /**
- * \brief Return nominal bits per a PCM sample
+ * \brief Return the bit-width of the format
  * \param format Sample format
- * \return bits per sample, a negative error code if not applicable
+ * \return the bit-width of the format, or a negative error code if not applicable
  */
 int snd_pcm_format_width(snd_pcm_format_t format)
 {
@@ -270,9 +270,9 @@ int snd_pcm_format_width(snd_pcm_format_t format)
 }
 
 /**
- * \brief Return bits needed to store a PCM sample
+ * \brief Return the physical bit-width of the format (bits needed to store a PCM sample)
  * \param format Sample format
- * \return bits per sample, a negative error code if not applicable
+ * \return the physical bit-width of the format, or a negative error code if not applicable
  */
 int snd_pcm_format_physical_width(snd_pcm_format_t format)
 {
@@ -519,7 +519,7 @@ uint64_t snd_pcm_format_silence_64(snd_pcm_format_t format)
 		return bswap_64(u.i);
 #endif
 	}
-	case SNDRV_PCM_FORMAT_FLOAT_BE:		
+	case SNDRV_PCM_FORMAT_FLOAT_BE:
 	{
 		union {
 			float f[2];
@@ -547,7 +547,7 @@ uint64_t snd_pcm_format_silence_64(snd_pcm_format_t format)
 	}
 	case SNDRV_PCM_FORMAT_IEC958_SUBFRAME_LE:
 	case SNDRV_PCM_FORMAT_IEC958_SUBFRAME_BE:
-		return 0;	
+		return 0;
 	case SNDRV_PCM_FORMAT_MU_LAW:
 		return 0x7f7f7f7f7f7f7f7fULL;
 	case SNDRV_PCM_FORMAT_A_LAW:
@@ -619,12 +619,12 @@ int snd_pcm_format_set_silence(snd_pcm_format_t format, void *data, unsigned int
 		break;
 	}
 	case 8: {
-		uint8_t silence = snd_pcm_format_silence_64(format);
+		uint8_t silence = snd_pcm_format_silence(format);
 		memset(data, silence, samples);
 		break;
 	}
 	case 16: {
-		uint16_t silence = snd_pcm_format_silence_64(format);
+		uint16_t silence = snd_pcm_format_silence_16(format);
 		uint16_t *pdata = (uint16_t *)data;
 		if (! silence)
 			memset(data, 0, samples * 2);
@@ -635,7 +635,7 @@ int snd_pcm_format_set_silence(snd_pcm_format_t format, void *data, unsigned int
 		break;
 	}
 	case 24: {
-		uint32_t silence = snd_pcm_format_silence_64(format);
+		uint32_t silence = snd_pcm_format_silence_32(format);
 		uint8_t *pdata = (uint8_t *)data;
 		if (! silence)
 			memset(data, 0, samples * 3);
@@ -655,7 +655,7 @@ int snd_pcm_format_set_silence(snd_pcm_format_t format, void *data, unsigned int
 		break;
 	}
 	case 32: {
-		uint32_t silence = snd_pcm_format_silence_64(format);
+		uint32_t silence = snd_pcm_format_silence_32(format);
 		uint32_t *pdata = (uint32_t *)data;
 		if (! silence)
 			memset(data, 0, samples * 4);
@@ -803,11 +803,11 @@ int snd_pcm_parse_control_id(snd_config_t *conf, snd_ctl_elem_id_t *ctl_id, int 
 		if (strcmp(id, "iface") == 0 || strcmp(id, "interface") == 0) {
 			const char *ptr;
 			if ((err = snd_config_get_string(n, &ptr)) < 0) {
-				SNDERR("field %s is not a string", id);
+				snd_error(PCM, "field %s is not a string", id);
 				goto _err;
 			}
 			if ((err = snd_config_get_ctl_iface_ascii(ptr)) < 0) {
-				SNDERR("Invalid value for '%s'", id);
+				snd_error(PCM, "Invalid value for '%s'", id);
 				goto _err;
 			}
 			iface = err;
@@ -815,28 +815,28 @@ int snd_pcm_parse_control_id(snd_config_t *conf, snd_ctl_elem_id_t *ctl_id, int 
 		}
 		if (strcmp(id, "name") == 0) {
 			if ((err = snd_config_get_string(n, &name)) < 0) {
-				SNDERR("field %s is not a string", id);
+				snd_error(PCM, "field %s is not a string", id);
 				goto _err;
 			}
 			continue;
 		}
 		if (strcmp(id, "index") == 0) {
 			if ((err = snd_config_get_integer(n, &index)) < 0) {
-				SNDERR("field %s is not an integer", id);
+				snd_error(PCM, "field %s is not an integer", id);
 				goto _err;
 			}
 			continue;
 		}
 		if (strcmp(id, "device") == 0) {
 			if ((err = snd_config_get_integer(n, &device)) < 0) {
-				SNDERR("field %s is not an integer", id);
+				snd_error(PCM, "field %s is not an integer", id);
 				goto _err;
 			}
 			continue;
 		}
 		if (strcmp(id, "subdevice") == 0) {
 			if ((err = snd_config_get_integer(n, &subdevice)) < 0) {
-				SNDERR("field %s is not an integer", id);
+				snd_error(PCM, "field %s is not an integer", id);
 				goto _err;
 			}
 			continue;
@@ -844,11 +844,11 @@ int snd_pcm_parse_control_id(snd_config_t *conf, snd_ctl_elem_id_t *ctl_id, int 
 		if (cchannelsp && strcmp(id, "count") == 0) {
 			long v;
 			if ((err = snd_config_get_integer(n, &v)) < 0) {
-				SNDERR("field %s is not an integer", id);
+				snd_error(PCM, "field %s is not an integer", id);
 				goto _err;
 			}
 			if (v < 1 || v > 2) {
-				SNDERR("Invalid count %ld", v);
+				snd_error(PCM, "Invalid count %ld", v);
 				goto _err;
 			}
 			*cchannelsp = v;
@@ -856,17 +856,17 @@ int snd_pcm_parse_control_id(snd_config_t *conf, snd_ctl_elem_id_t *ctl_id, int 
 		}
 		if (hwctlp && strcmp(id, "hwctl") == 0) {
 			if ((err = snd_config_get_bool(n)) < 0) {
-				SNDERR("The field %s must be a boolean type", id);
+				snd_error(PCM, "The field %s must be a boolean type", id);
 				return err;
 			}
 			*hwctlp = err;
 			continue;
 		}
-		SNDERR("Unknown field %s", id);
+		snd_error(PCM, "Unknown field %s", id);
 		return -EINVAL;
 	}
 	if (name == NULL) {
-		SNDERR("Missing control name");
+		snd_error(PCM, "Missing control name");
 		err = -EINVAL;
 		goto _err;
 	}

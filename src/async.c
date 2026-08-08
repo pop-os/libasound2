@@ -29,7 +29,9 @@
 #include <signal.h>
 
 static struct sigaction previous_action;
+#ifndef DOC_HIDDEN
 #define MAX_SIG_FUNCTION_CODE 10 /* i.e. SIG_DFL SIG_IGN SIG_HOLD et al */
+#endif /* DOC_HIDDEN */
 
 #ifdef SND_ASYNC_RT_SIGNAL
 /** async signal number */
@@ -41,7 +43,7 @@ void snd_async_init(void)
 {
 	snd_async_signo = __libc_allocate_rtsig(0);
 	if (snd_async_signo < 0) {
-		SNDERR("Unable to find a RT signal to use for snd_async");
+		snd_error(CORE, "Unable to find a RT signal to use for snd_async");
 		exit(1);
 	}
 }
@@ -107,7 +109,7 @@ static void snd_async_handler(int signo ATTRIBUTE_UNUSED, siginfo_t *siginfo, vo
  *
  * \see snd_async_add_pcm_handler, snd_async_add_ctl_handler
  */
-int snd_async_add_handler(snd_async_handler_t **handler, int fd, 
+int snd_async_add_handler(snd_async_handler_t **handler, int fd,
 			  snd_async_callback_t callback, void *private_data)
 {
 	snd_async_handler_t *h;
@@ -133,7 +135,7 @@ int snd_async_add_handler(snd_async_handler_t **handler, int fd,
 		assert(!previous_action.sa_sigaction);
 		err = sigaction(snd_async_signo, &act, &previous_action);
 		if (err < 0) {
-			SYSERR("sigaction");
+			snd_errornum(CORE, "sigaction");
 			return -errno;
 		}
 	}
@@ -147,40 +149,53 @@ int snd_async_add_handler(snd_async_handler_t **handler, int fd,
  */
 int snd_async_del_handler(snd_async_handler_t *handler)
 {
-	int err = 0;
-	int was_empty = list_empty(&snd_async_handlers);
+	int err = 0, err2 = 0;
 	assert(handler);
-	list_del(&handler->glist);
-	if (!was_empty
-	 && list_empty(&snd_async_handlers)) {
-		err = sigaction(snd_async_signo, &previous_action, NULL);
-		if (err < 0) {
-			SYSERR("sigaction");
-			return -errno;
-		}
-		memset(&previous_action, 0, sizeof(previous_action));
-	}
-	if (handler->type == SND_ASYNC_HANDLER_GENERIC)
-		goto _end;
-	if (!list_empty(&handler->hlist))
-		list_del(&handler->hlist);
-	if (!list_empty(&handler->hlist))
-		goto _end;
-	switch (handler->type) {
+	if (handler->type != SND_ASYNC_HANDLER_GENERIC) {
+		struct list_head *alist;
+		switch (handler->type) {
 #ifdef BUILD_PCM
-	case SND_ASYNC_HANDLER_PCM:
-		err = snd_pcm_async(handler->u.pcm, -1, 1);
-		break;
+		case SND_ASYNC_HANDLER_PCM:
+			alist = &handler->u.pcm->async_handlers;
+			break;
 #endif
-	case SND_ASYNC_HANDLER_CTL:
-		err = snd_ctl_async(handler->u.ctl, -1, 1);
-		break;
-	default:
-		assert(0);
+		case SND_ASYNC_HANDLER_CTL:
+			alist = &handler->u.ctl->async_handlers;
+			break;
+		default:
+			assert(0);
+		}
+		if (!list_empty(alist))
+			list_del(&handler->hlist);
+		if (!list_empty(alist))
+			goto _glist;
+		switch (handler->type) {
+#ifdef BUILD_PCM
+		case SND_ASYNC_HANDLER_PCM:
+			err2 = snd_pcm_async(handler->u.pcm, -1, 1);
+			break;
+#endif
+		case SND_ASYNC_HANDLER_CTL:
+			err2 = snd_ctl_async(handler->u.ctl, -1, 1);
+			break;
+		default:
+			assert(0);
+		}
 	}
- _end:
+ _glist:
+	if (!list_empty(&snd_async_handlers)) {
+		list_del(&handler->glist);
+		if (list_empty(&snd_async_handlers)) {
+			err = sigaction(snd_async_signo, &previous_action, NULL);
+			if (err < 0) {
+				snd_errornum(CORE, "sigaction");
+				return -errno;
+			}
+			memset(&previous_action, 0, sizeof(previous_action));
+		}
+	}
 	free(handler);
-	return err;
+	return err ? err : err2;
 }
 
 /**

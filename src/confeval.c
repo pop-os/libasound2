@@ -31,14 +31,16 @@
  *
  */
 
+#include "local.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
-#include "local.h"
 
+#ifndef DOC_HIDDEN
 typedef long long value_type_t;
+#endif /* DOC_HIDDEN */
 
 static const char *_find_end_of_expression(const char *s, char begin, char end)
 {
@@ -74,51 +76,19 @@ static int _parse_integer(value_type_t *val, const char **s)
 
 static int _to_integer(value_type_t *val, snd_config_t *c)
 {
+	long long v;
 	int err;
 
-	switch(snd_config_get_type(c)) {
-	case SND_CONFIG_TYPE_INTEGER:
-		{
-			long v;
-			err = snd_config_get_integer(c, &v);
-			if (err >= 0)
-				*val = v;
-		}
-		break;
-	case SND_CONFIG_TYPE_INTEGER64:
-		{
-			long long v;
-			err = snd_config_get_integer64(c, &v);
-			if (err >= 0) {
-				*val = v;
-				if (((long long)*val) != v)
-					return -ERANGE;
-				return 0;
-			}
-		}
-		break;
-	case SND_CONFIG_TYPE_STRING:
-		{
-			const char *s;
-			long long v;
-			err = snd_config_get_string(c, &s);
-			if (err >= 0) {
-				err = safe_strtoll(s, &v);
-				if (err >= 0) {
-					*val = v;
-					if (((long long)*val) != v)
-						return -ERANGE;
-					return 0;
-				}
-			}
-		}
-		break;
-	default:
-		return -EINVAL;
-	}
-	return err;
+	err = snd_config_get_llong(c, &v, 0);
+	if (err < 0)
+		return err;
+	*val = v;
+	if (((long long)*val) != v)
+		return -ERANGE;
+	return 0;
 }
 
+#ifndef DOC_HIDDEN
 int _snd_eval_string(snd_config_t **dst, const char *s,
 		     snd_config_expand_fcn_t fcn, void *private_data)
 {
@@ -144,7 +114,7 @@ int _snd_eval_string(snd_config_t **dst, const char *s,
 		if (c == '\0')
 			break;
 		if (pos == END) {
-			SNDERR("unexpected expression tail '%s'", s);
+			snd_error(CORE, "unexpected expression tail '%s'", s);
 			return -EINVAL;
 		}
 		if (pos == OP) {
@@ -157,7 +127,7 @@ int _snd_eval_string(snd_config_t **dst, const char *s,
 				case '|':
 				case '&': op = c; break;
 				default:
-					SNDERR("unknown operation '%c'", c);
+					snd_error(CORE, "unknown operation '%c'", c);
 					return -EINVAL;
 			}
 			pos = RIGHT;
@@ -222,7 +192,7 @@ int _snd_eval_string(snd_config_t **dst, const char *s,
 		pos = op == LEFT ? OP : END;
 	}
 	if (pos != OP && pos != END) {
-		SNDERR("incomplete expression '%s'", save);
+		snd_error(CORE, "incomplete expression '%s'", save);
 		return -EINVAL;
 	}
 
@@ -244,6 +214,7 @@ int _snd_eval_string(snd_config_t **dst, const char *s,
 	else
 		return snd_config_imake_integer(dst, NULL, left);
 }
+#endif /* DOC_HIDDEN */
 
 /**
  * \brief Evaluate an math expression in the string
@@ -251,7 +222,7 @@ int _snd_eval_string(snd_config_t **dst, const char *s,
  *                 node at the address specified by \a dst.
  * \param[in] s A string to evaluate
  * \param[in] fcn A function to get the variable contents
- * \param[in] private_value A private value for the variable contents function
+ * \param[in] private_data A private value for the variable contents function
  * \return 0 if successful, otherwise a negative error code.
  */
 int snd_config_evaluate_string(snd_config_t **dst, const char *s,
@@ -265,7 +236,7 @@ int snd_config_evaluate_string(snd_config_t **dst, const char *s,
 	if (s[1] == '[') {
 		err = _snd_eval_string(dst, s, fcn, private_data);
 		if (err < 0)
-			SNDERR("wrong expression '%s'", s);
+			snd_error(CORE, "wrong expression '%s'", s);
 	} else {
 		err = fcn(dst, s + 1, private_data);
 	}

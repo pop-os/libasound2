@@ -13,44 +13,27 @@
   GNU Lesser General Public License for more details.
 
   Authors: Mengdong Lin <mengdong.lin@intel.com>
-           Yao Jin <yao.jin@intel.com>
-           Liam Girdwood <liam.r.girdwood@linux.intel.com>
+	   Yao Jin <yao.jin@intel.com>
+	   Liam Girdwood <liam.r.girdwood@linux.intel.com>
 */
 
-#include <sys/stat.h>
-#include "list.h"
 #include "tplg_local.h"
+#include <sys/stat.h>
 
 /*
  * Get integer value
  */
 int tplg_get_integer(snd_config_t *n, int *val, int base)
 {
-	const char *str;
-	long lval;
+	long long llval;
 	int err;
 
-	switch (snd_config_get_type(n)) {
-	case SND_CONFIG_TYPE_INTEGER:
-		err = snd_config_get_integer(n, &lval);
-		if (err < 0)
-			return err;
-		goto __retval;
-	case SND_CONFIG_TYPE_STRING:
-		err = snd_config_get_string(n, &str);
-		if (err < 0)
-			return err;
-		err = safe_strtol_base(str, &lval, base);
-		if (err < 0)
-			return err;
-		goto __retval;
-	default:
-		return -EINVAL;
-	}
-  __retval:
-	if (lval < INT_MIN || lval > INT_MAX)
+	err = snd_config_get_llong(n, &llval, base);
+	if (err < 0)
+		return err;
+	if (llval < INT_MIN || llval > INT_MAX)
 		return -ERANGE;
-	*val = lval;
+	*val = llval;
 	return 0;
 }
 
@@ -59,50 +42,18 @@ int tplg_get_integer(snd_config_t *n, int *val, int base)
  */
 int tplg_get_unsigned(snd_config_t *n, unsigned *val, int base)
 {
-	const char *str;
-	long lval;
 	long long llval;
-	unsigned long uval;
 	int err;
 
-	switch (snd_config_get_type(n)) {
-	case SND_CONFIG_TYPE_INTEGER:
-		err = snd_config_get_integer(n, &lval);
-		if (err < 0)
-			return err;
-		if (lval < 0 && lval >= INT_MIN)
-			lval = UINT_MAX + lval + 1;
-		if (lval < 0 || lval > UINT_MAX)
-			return -ERANGE;
-		*val = lval;
+	err = snd_config_get_llong(n, &llval, base);
+	if (err < 0)
 		return err;
-	case SND_CONFIG_TYPE_INTEGER64:
-		err = snd_config_get_integer64(n, &llval);
-		if (err < 0)
-			return err;
-		if (llval < 0 && llval >= INT_MIN)
-			llval = UINT_MAX + llval + 1;
-		if (llval < 0 || llval > UINT_MAX)
-			return -ERANGE;
-		*val = llval;
-		return err;
-	case SND_CONFIG_TYPE_STRING:
-		err = snd_config_get_string(n, &str);
-		if (err < 0)
-			return err;
-		errno = 0;
-		uval = strtoul(str, NULL, base);
-		if (errno == ERANGE && uval == ULONG_MAX)
-			return -ERANGE;
-		if (errno && uval == 0)
-			return -EINVAL;
-		if (uval > UINT_MAX)
-			return -ERANGE;
-		*val = uval;
-		return 0;
-	default:
-		return -EINVAL;
-	}
+	if (llval < 0 && llval >= INT_MIN)
+		llval = UINT_MAX + llval + 1;
+	if (llval < 0 || llval > UINT_MAX)
+		return -ERANGE;
+	*val = llval;
+	return 0;
 }
 
 /*
@@ -121,7 +72,7 @@ int tplg_parse_compound(snd_tplg_t *tplg, snd_config_t *cfg,
 		return -EINVAL;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		SNDERR("compound type expected for %s", id);
+		snd_error(TOPOLOGY, "compound type expected for %s", id);
 		return -EINVAL;
 	}
 
@@ -130,8 +81,9 @@ int tplg_parse_compound(snd_tplg_t *tplg, snd_config_t *cfg,
 		n = snd_config_iterator_entry(i);
 
 		if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-			SNDERR("compound type expected for %s, is %d",
-				id, snd_config_get_type(cfg));
+			snd_error(TOPOLOGY, "compound type expected for %s, is %d",
+					     id, snd_config_get_type(cfg));
+
 			return -EINVAL;
 		}
 
@@ -154,7 +106,7 @@ static int tplg_parse_config(snd_tplg_t *tplg, snd_config_t *cfg)
 	int err;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		SNDERR("compound type expected at top level");
+		snd_error(TOPOLOGY, "compound type expected at top level");
 		return -EINVAL;
 	}
 
@@ -179,7 +131,7 @@ static int tplg_parse_config(snd_tplg_t *tplg, snd_config_t *cfg)
 		}
 
 		if (parser == NULL) {
-			SNDERR("unknown section %s", id);
+			snd_error(TOPOLOGY, "unknown section %s", id);
 			continue;
 		}
 
@@ -201,7 +153,7 @@ static int tplg_load_config(snd_tplg_t *tplg, snd_input_t *in)
 
 	ret = snd_config_load(top, in);
 	if (ret < 0) {
-		SNDERR("could not load configuration");
+		snd_error(TOPOLOGY, "could not load configuration");
 		snd_config_delete(top);
 		return ret;
 	}
@@ -209,7 +161,7 @@ static int tplg_load_config(snd_tplg_t *tplg, snd_input_t *in)
 	ret = tplg_parse_config(tplg, top);
 	snd_config_delete(top);
 	if (ret < 0) {
-		SNDERR("failed to parse topology");
+		snd_error(TOPOLOGY, "failed to parse topology");
 		return ret;
 	}
 
@@ -266,7 +218,7 @@ int snd_tplg_load(snd_tplg_t *tplg, const char *buf, size_t size)
 
 	err = snd_input_buffer_open(&in, buf, size);
 	if (err < 0) {
-		SNDERR("could not create input buffer");
+		snd_error(TOPOLOGY, "could not create input buffer");
 		return err;
 	}
 
@@ -281,13 +233,13 @@ static int tplg_build(snd_tplg_t *tplg)
 
 	err = tplg_build_integ(tplg);
 	if (err < 0) {
-		SNDERR("failed to check topology integrity");
+		snd_error(TOPOLOGY, "failed to check topology integrity");
 		return err;
 	}
 
 	err = tplg_write_data(tplg);
 	if (err < 0) {
-		SNDERR("failed to write data %d", err);
+		snd_error(TOPOLOGY, "failed to write data %d", err);
 		return err;
 	}
 	return 0;
@@ -303,14 +255,14 @@ int snd_tplg_build_file(snd_tplg_t *tplg,
 
 	fp = fopen(infile, "r");
 	if (fp == NULL) {
-		SNDERR("could not open configuration file %s", infile);
+		snd_error(TOPOLOGY, "could not open configuration file %s", infile);
 		return -errno;
 	}
 
 	err = snd_input_stdio_attach(&in, fp, 1);
 	if (err < 0) {
 		fclose(fp);
-		SNDERR("could not attach stdio %s", infile);
+		snd_error(TOPOLOGY, "could not attach stdio %s", infile);
 		return err;
 	}
 
@@ -344,7 +296,7 @@ int snd_tplg_add_object(snd_tplg_t *tplg, snd_tplg_obj_template_t *t)
 	case SND_TPLG_TYPE_CC:
 		return tplg_add_link_object(tplg, t);
 	default:
-		SNDERR("invalid object type %d", t->type);
+		snd_error(TOPOLOGY, "invalid object type %d", t->type);
 		return -EINVAL;
 	};
 }
@@ -360,18 +312,18 @@ int snd_tplg_build(snd_tplg_t *tplg, const char *outfile)
 
 	fd = open(outfile, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
 	if (fd < 0) {
-		SNDERR("failed to open %s err %d", outfile, -errno);
+		snd_error(TOPOLOGY, "failed to open %s err %d", outfile, -errno);
 		return -errno;
 	}
 	r = write(fd, tplg->bin, tplg->bin_size);
 	close(fd);
 	if (r < 0) {
 		err = -errno;
-		SNDERR("write error: %s", strerror(errno));
+		snd_error(TOPOLOGY, "write error: %s", strerror(errno));
 		return err;
 	}
 	if ((size_t)r != tplg->bin_size) {
-		SNDERR("partial write (%zd != %zd)", r, tplg->bin_size);
+		snd_error(TOPOLOGY, "partial write (%zd != %zd)", r, tplg->bin_size);
 		return -EIO;
 	}
 	return 0;
@@ -437,7 +389,7 @@ snd_tplg_t *snd_tplg_create(int flags)
 	snd_tplg_t *tplg;
 
 	if (!is_little_endian()) {
-		SNDERR("cannot support big-endian machines");
+		snd_error(TOPOLOGY, "cannot support big-endian machines");
 		return NULL;
 	}
 

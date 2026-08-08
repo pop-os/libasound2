@@ -23,10 +23,10 @@
 #ifndef __SEQ_LOCAL_H
 #define __SEQ_LOCAL_H
 
+#include "local.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
-#include "local.h"
 
 #define SND_SEQ_OBUF_SIZE	(16*1024)	/* default size */
 #define SND_SEQ_IBUF_SIZE	500		/* in event_size aligned */
@@ -41,6 +41,8 @@ typedef struct {
 	int (*system_info)(snd_seq_t *seq, snd_seq_system_info_t * info);
 	int (*get_client_info)(snd_seq_t *seq, snd_seq_client_info_t * info);
 	int (*set_client_info)(snd_seq_t *seq, snd_seq_client_info_t * info);
+	int (*get_ump_info)(snd_seq_t *seq, int client, int type, void *info);
+	int (*set_ump_info)(snd_seq_t *seq, int type, const void *info);
 	int (*create_port)(snd_seq_t *seq, snd_seq_port_info_t * port);
 	int (*delete_port)(snd_seq_t *seq, snd_seq_port_info_t * port);
 	int (*get_port_info)(snd_seq_t *seq, snd_seq_port_info_t * info);
@@ -84,12 +86,19 @@ struct _snd_seq {
 	char *obuf;		/* output buffer */
 	size_t obufsize;		/* output buffer size */
 	size_t obufused;		/* output buffer used size */
-	snd_seq_event_t *ibuf;	/* input buffer */
+	char *ibuf;		/* input buffer */
 	size_t ibufptr;		/* current pointer of input buffer */
 	size_t ibuflen;		/* queued length */
 	size_t ibufsize;		/* input buffer size */
 	snd_seq_event_t *tmpbuf;	/* temporary event for extracted event */
 	size_t tmpbufsize;		/* size of errbuf */
+	size_t packet_size;		/* input packet alignment size */
+	int midi_version;	/* current protocol version */
+	int has_queue_tempo_base;	/* support queue tempo-base? */
+
+	unsigned int num_ump_groups;		/* number of UMP groups */
+	snd_ump_endpoint_info_t *ump_ep;	/* optional UMP info */
+	snd_ump_block_info_t *ump_blks[16];	/* optional UMP block info */
 };
 
 int snd_seq_hw_open(snd_seq_t **handle, const char *name, int streams, int mode);

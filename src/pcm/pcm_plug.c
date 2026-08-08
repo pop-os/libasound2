@@ -25,7 +25,7 @@
  *   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
-  
+
 #include "pcm_local.h"
 #include "pcm_plugin.h"
 
@@ -85,7 +85,7 @@ static int snd_pcm_plug_info(snd_pcm_t *pcm, snd_pcm_info_t *info)
 	snd_pcm_plug_t *plug = pcm->private_data;
 	snd_pcm_t *slave = plug->req_slave;
 	int err;
-	
+
 	if ((err = snd_pcm_info(slave, info)) < 0)
 		return err;
 	return 0;
@@ -186,7 +186,8 @@ static const snd_pcm_format_t linear_preferred_formats[] = {
 
 #if defined(BUILD_PCM_PLUGIN_MULAW) || \
 	defined(BUILD_PCM_PLUGIN_ALAW) || \
-	defined(BUILD_PCM_PLUGIN_ADPCM)
+	defined(BUILD_PCM_PLUGIN_ADPCM) || \
+	defined(BUILD_PCM_PLUGIN_IEC958)
 #define BUILD_PCM_NONLINEAR
 #endif
 
@@ -200,6 +201,10 @@ static const snd_pcm_format_t nonlinear_preferred_formats[] = {
 #endif
 #ifdef BUILD_PCM_PLUGIN_ADPCM
 	SND_PCM_FORMAT_IMA_ADPCM,
+#endif
+#ifdef BUILD_PCM_PLUGIN_IEC958
+	SND_PCM_FORMAT_IEC958_SUBFRAME_LE,
+	SND_PCM_FORMAT_IEC958_SUBFRAME_BE,
 #endif
 };
 #endif
@@ -230,6 +235,8 @@ static const char linear_format_widths[32] = {
 static int check_linear_format(const snd_pcm_format_mask_t *format_mask, int wid, int sgn, int ed)
 {
 	int e, s;
+	if (wid < 1 || wid > 32)
+		return SND_PCM_FORMAT_UNKNOWN;
 	if (! linear_format_widths[wid - 1])
 		return SND_PCM_FORMAT_UNKNOWN;
 	for (e = 0; e < 2; e++) {
@@ -445,13 +452,15 @@ static int snd_pcm_plug_change_channels(snd_pcm_t *pcm, snd_pcm_t **new, snd_pcm
 				snd_pcm_route_ttable_entry_t v = SND_PCM_PLUGIN_ROUTE_FULL;
 				if (rpolicy == PLUG_ROUTE_POLICY_AVERAGE) {
 					if (pcm->stream == SND_PCM_STREAM_PLAYBACK &&
-					    clt->channels > slv->channels) {
+					    clt->channels > slv->channels &&
+					    slv->channels > 0) {
 						int srcs = clt->channels / slv->channels;
 						if (s < clt->channels % slv->channels)
 							srcs++;
 						v /= srcs;
 					} else if (pcm->stream == SND_PCM_STREAM_CAPTURE &&
-						   slv->channels > clt->channels) {
+						   slv->channels > clt->channels &&
+						   clt->channels > 0) {
 							int srcs = slv->channels / clt->channels;
 						if (s < slv->channels % clt->channels)
 							srcs++;
@@ -475,7 +484,7 @@ static int snd_pcm_plug_change_channels(snd_pcm_t *pcm, snd_pcm_t **new, snd_pcm
 				ttable[c * tt_ssize + c] = SND_PCM_PLUGIN_ROUTE_FULL;
 			break;
 		default:
-			SNDERR("Invalid route policy");
+			snd_error(PCM, "Invalid route policy");
 			break;
 		}
 	}
@@ -487,6 +496,18 @@ static int snd_pcm_plug_change_channels(snd_pcm_t *pcm, snd_pcm_t **new, snd_pcm
 	if (snd_pcm_format_linear(clt->format))
 		slv->format = clt->format;
 	return 1;
+}
+#endif
+
+#ifdef BUILD_PCM_PLUGIN_IEC958
+static int iec958_open(snd_pcm_t **pcmp, const char *name,
+		       snd_pcm_format_t sformat, snd_pcm_t *slave,
+		       int close_slave)
+{
+	unsigned char preamble_vals[3] = {
+		0x08, 0x02, 0x04 /* Z, X, Y */
+	};
+	return snd_pcm_iec958_open(pcmp, name, sformat, slave, close_slave, NULL, preamble_vals, 0);
 }
 #endif
 
@@ -527,6 +548,12 @@ static int snd_pcm_plug_change_format(snd_pcm_t *pcm, snd_pcm_t **new, snd_pcm_p
 			f = snd_pcm_adpcm_open;
 			break;
 #endif
+#ifdef BUILD_PCM_PLUGIN_IEC958
+		case SND_PCM_FORMAT_IEC958_SUBFRAME_LE:
+		case SND_PCM_FORMAT_IEC958_SUBFRAME_BE:
+			f = iec958_open;
+			break;
+#endif
 		default:
 #ifdef BUILD_PCM_PLUGIN_LFLOAT
 			if (snd_pcm_format_float(clt->format))
@@ -565,6 +592,12 @@ static int snd_pcm_plug_change_format(snd_pcm_t *pcm, snd_pcm_t **new, snd_pcm_p
 #ifdef BUILD_PCM_PLUGIN_ADPCM
 		case SND_PCM_FORMAT_IMA_ADPCM:
 			f = snd_pcm_adpcm_open;
+			break;
+#endif
+#ifdef BUILD_PCM_PLUGIN_IEC958
+		case SND_PCM_FORMAT_IEC958_SUBFRAME_LE:
+		case SND_PCM_FORMAT_IEC958_SUBFRAME_BE:
+			f = iec958_open;
 			break;
 #endif
 		default:
@@ -714,7 +747,7 @@ static int snd_pcm_plug_hw_refine_sprepare(snd_pcm_t *pcm, snd_pcm_hw_params_t *
 {
 	snd_pcm_plug_t *plug = pcm->private_data;
 	int err;
-	
+
 	_snd_pcm_hw_params_any(sparams);
 	if (plug->sformat >= 0) {
 		_snd_pcm_hw_params_set_format(sparams, plug->sformat);
@@ -753,7 +786,7 @@ static int check_access_change(snd_pcm_hw_params_t *cparams,
 	/* no mmap support - we need mmap emulation */
 
 	if (!snd_pcm_access_mask_test(smask, SND_PCM_ACCESS_RW_INTERLEAVED) &&
-	    !snd_pcm_access_mask_test(smask, SND_PCM_ACCESS_RW_NONINTERLEAVED)) 
+	    !snd_pcm_access_mask_test(smask, SND_PCM_ACCESS_RW_NONINTERLEAVED))
 		return -EINVAL; /* even no RW access?  no way! */
 
 	cmask = (const snd_pcm_access_mask_t *)
@@ -803,7 +836,7 @@ static int snd_pcm_plug_hw_refine_schange(snd_pcm_t *pcm, snd_pcm_hw_params_t *p
 		if (err < 0)
 			return err;
 	}
-	
+
 	if (plug->schannels == -2 || (pcm->mode & SND_PCM_NO_AUTO_CHANNELS))
 		links |= SND_PCM_HW_PARBIT_CHANNELS;
 	else {
@@ -832,16 +865,16 @@ static int snd_pcm_plug_hw_refine_schange(snd_pcm_t *pcm, snd_pcm_hw_params_t *p
 		}
 
 		if (snd_pcm_format_mask_empty(&sfmt_mask)) {
-			SNDERR("Unable to find an usable slave format for '%s'", pcm->name);
+			snd_error(PCM, "Unable to find an usable slave format for '%s'", pcm->name);
 			for (format = 0; format <= SND_PCM_FORMAT_LAST; format++) {
 				if (!snd_pcm_format_mask_test(format_mask, format))
 					continue;
-				SNDERR("Format: %s", snd_pcm_format_name(format));
+				snd_error(PCM, "Format: %s", snd_pcm_format_name(format));
 			}
 			for (format = 0; format <= SND_PCM_FORMAT_LAST; format++) {
 				if (!snd_pcm_format_mask_test(sformat_mask, format))
 					continue;
-				SNDERR("Slave format: %s", snd_pcm_format_name(format));
+				snd_error(PCM, "Slave format: %s", snd_pcm_format_name(format));
 			}
 			return -EINVAL;
 		}
@@ -854,8 +887,9 @@ static int snd_pcm_plug_hw_refine_schange(snd_pcm_t *pcm, snd_pcm_hw_params_t *p
 	if (snd_pcm_hw_param_never_eq(params, SND_PCM_HW_PARAM_ACCESS, sparams)) {
 		err = check_access_change(params, sparams);
 		if (err < 0) {
-			SNDERR("Unable to find an usable access for '%s'",
-			       pcm->name);
+			snd_error(PCM, "Unable to find an usable access for '%s'",
+				       pcm->name);
+
 			return err;
 		}
 	}
@@ -879,7 +913,7 @@ static int snd_pcm_plug_hw_refine_schange(snd_pcm_t *pcm, snd_pcm_hw_params_t *p
 		return err;
 	return 0;
 }
-	
+
 static int snd_pcm_plug_hw_refine_cchange(snd_pcm_t *pcm ATTRIBUTE_UNUSED,
 					  snd_pcm_hw_params_t *params,
 					  snd_pcm_hw_params_t *sparams)
@@ -921,21 +955,21 @@ static int snd_pcm_plug_hw_refine_cchange(snd_pcm_t *pcm ATTRIBUTE_UNUSED,
 		}
 
 		if (snd_pcm_format_mask_empty(&fmt_mask)) {
-			SNDERR("Unable to find an usable client format");
+			snd_error(PCM, "Unable to find an usable client format");
 			for (format = 0; format <= SND_PCM_FORMAT_LAST; format++) {
 				if (!snd_pcm_format_mask_test(format_mask, format))
 					continue;
-				SNDERR("Format: %s", snd_pcm_format_name(format));
+				snd_error(PCM, "Format: %s", snd_pcm_format_name(format));
 			}
 			for (format = 0; format <= SND_PCM_FORMAT_LAST; format++) {
 				if (!snd_pcm_format_mask_test(sformat_mask, format))
 					continue;
-				SNDERR("Slave format: %s", snd_pcm_format_name(format));
+				snd_error(PCM, "Slave format: %s", snd_pcm_format_name(format));
 			}
 			return -EINVAL;
 		}
-		
-		err = _snd_pcm_hw_param_set_mask(params, 
+
+		err = _snd_pcm_hw_param_set_mask(params,
 						 SND_PCM_HW_PARAM_FORMAT, &fmt_mask);
 		if (err < 0)
 			return err;
@@ -948,7 +982,7 @@ static int snd_pcm_plug_hw_refine_cchange(snd_pcm_t *pcm ATTRIBUTE_UNUSED,
 	else {
 		unsigned int rate_min, srate_min;
 		int rate_mindir, srate_mindir;
-		
+
 		/* This is a temporary hack, waiting for a better solution */
 		err = snd_pcm_hw_param_get_min(params, SND_PCM_HW_PARAM_RATE, &rate_min, &rate_mindir);
 		if (err < 0)
@@ -1065,6 +1099,18 @@ static int snd_pcm_plug_hw_free(snd_pcm_t *pcm)
 	return err;
 }
 
+static int snd_pcm_plug_sw_params(snd_pcm_t *pcm, snd_pcm_sw_params_t * params)
+{
+	snd_pcm_plug_t *plug = pcm->private_data;
+	snd_pcm_t *slave = plug->gen.slave;
+	int err = snd_pcm_sw_params(slave, params);
+	if (err >= 0) {
+		pcm->fast_ops = slave->fast_ops;
+		pcm->fast_op_arg = slave->fast_op_arg;
+	}
+	return err;
+}
+
 static void snd_pcm_plug_dump(snd_pcm_t *pcm, snd_output_t *out)
 {
 	snd_pcm_plug_t *plug = pcm->private_data;
@@ -1078,7 +1124,7 @@ static const snd_pcm_ops_t snd_pcm_plug_ops = {
 	.hw_refine = snd_pcm_plug_hw_refine,
 	.hw_params = snd_pcm_plug_hw_params,
 	.hw_free = snd_pcm_plug_hw_free,
-	.sw_params = snd_pcm_generic_sw_params,
+	.sw_params = snd_pcm_plug_sw_params,
 	.channel_info = snd_pcm_generic_channel_info,
 	.dump = snd_pcm_plug_dump,
 	.nonblock = snd_pcm_generic_nonblock,
@@ -1130,7 +1176,7 @@ int snd_pcm_plug_open(snd_pcm_t **pcmp,
 	plug->tt_ssize = tt_ssize;
 	plug->tt_cused = tt_cused;
 	plug->tt_sused = tt_sused;
-	
+
 	err = snd_pcm_new(&pcm, SND_PCM_TYPE_PLUG, name, slave->stream, slave->mode);
 	if (err < 0) {
 		free(plug);
@@ -1168,17 +1214,17 @@ This plugin converts channels, rate and format on request.
 
 \code
 pcm.name {
-        type plug               # Automatic conversion PCM
-        slave STR               # Slave name
-        # or
-        slave {                 # Slave definition
-                pcm STR         # Slave PCM name
-                # or
-                pcm { }         # Slave PCM definition
+	type plug               # Automatic conversion PCM
+	slave STR               # Slave name
+	# or
+	slave {                 # Slave definition
+		pcm STR         # Slave PCM name
+		# or
+		pcm { }         # Slave PCM definition
 		[format STR]	# Slave format (default nearest) or "unchanged"
 		[channels INT]	# Slave channels (default nearest) or "unchanged"
 		[rate INT]	# Slave rate (default nearest) or "unchanged"
-        }
+	}
 	route_policy STR	# route policy for automatic ttable generation
 				# STR can be 'default', 'average', 'copy', 'duplicate'
 				# average: result is average of input channels
@@ -1221,7 +1267,7 @@ pcm.name {
  *          changed in future.
  */
 int _snd_pcm_plug_open(snd_pcm_t **pcmp, const char *name,
-		       snd_config_t *root, snd_config_t *conf, 
+		       snd_config_t *root, snd_config_t *conf,
 		       snd_pcm_stream_t stream, int mode)
 {
 	snd_config_iterator_t i, next;
@@ -1252,7 +1298,7 @@ int _snd_pcm_plug_open(snd_pcm_t **pcmp, const char *name,
 		if (strcmp(id, "ttable") == 0) {
 			route_policy = PLUG_ROUTE_POLICY_NONE;
 			if (snd_config_get_type(n) != SND_CONFIG_TYPE_COMPOUND) {
-				SNDERR("Invalid type for %s", id);
+				snd_error(PCM, "Invalid type for %s", id);
 				return -EINVAL;
 			}
 			tt = n;
@@ -1261,11 +1307,11 @@ int _snd_pcm_plug_open(snd_pcm_t **pcmp, const char *name,
 		if (strcmp(id, "route_policy") == 0) {
 			const char *str;
 			if ((err = snd_config_get_string(n, &str)) < 0) {
-				SNDERR("Invalid type for %s", id);
+				snd_error(PCM, "Invalid type for %s", id);
 				return -EINVAL;
 			}
 			if (tt != NULL)
-				SNDERR("Table is defined, route policy is ignored");
+				snd_error(PCM, "Table is defined, route policy is ignored");
 			if (!strcmp(str, "default"))
 				route_policy = PLUG_ROUTE_POLICY_DEFAULT;
 			else if (!strcmp(str, "average"))
@@ -1283,11 +1329,11 @@ int _snd_pcm_plug_open(snd_pcm_t **pcmp, const char *name,
 			continue;
 		}
 #endif
-		SNDERR("Unknown field %s", id);
+		snd_error(PCM, "Unknown field %s", id);
 		return -EINVAL;
 	}
 	if (!slave) {
-		SNDERR("slave is not defined");
+		snd_error(PCM, "slave is not defined");
 		return -EINVAL;
 	}
 	err = snd_pcm_slave_conf(root, slave, &sconf, 3,
@@ -1296,6 +1342,7 @@ int _snd_pcm_plug_open(snd_pcm_t **pcmp, const char *name,
 				 SND_PCM_HW_PARAM_RATE, SCONF_UNCHANGED, &srate);
 	if (err < 0)
 		return err;
+	csize = ssize = cused = sused = 0;
 #ifdef BUILD_PCM_PLUGIN_ROUTE
 	if (tt) {
 		err = snd_pcm_route_determine_ttable(tt, &csize, &ssize);
@@ -1310,12 +1357,13 @@ int _snd_pcm_plug_open(snd_pcm_t **pcmp, const char *name,
 		}
 		err = snd_pcm_route_load_ttable(tt, ttable, csize, ssize, &cused, &sused, -1);
 		if (err < 0) {
+			free(ttable);
 			snd_config_delete(sconf);
 			return err;
 		}
 	}
 #endif
-	
+
 #ifdef BUILD_PCM_PLUGIN_RATE
 	if (! rate_converter)
 		rate_converter = snd_pcm_rate_get_default_converter(root);
@@ -1323,8 +1371,10 @@ int _snd_pcm_plug_open(snd_pcm_t **pcmp, const char *name,
 
 	err = snd_pcm_open_slave(&spcm, root, sconf, stream, mode, conf);
 	snd_config_delete(sconf);
-	if (err < 0)
+	if (err < 0) {
+		free(ttable);
 		return err;
+	}
 	err = snd_pcm_plug_open(pcmp, name, sformat, schannels, srate, rate_converter,
 				route_policy, ttable, ssize, cused, sused, spcm, 1);
 	if (err < 0)

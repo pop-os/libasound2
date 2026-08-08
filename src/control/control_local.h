@@ -47,6 +47,9 @@ typedef struct _snd_ctl_ops {
 	int (*rawmidi_next_device)(snd_ctl_t *handle, int *device);
 	int (*rawmidi_info)(snd_ctl_t *handle, snd_rawmidi_info_t * info);
 	int (*rawmidi_prefer_subdevice)(snd_ctl_t *handle, int subdev);
+	int (*ump_next_device)(snd_ctl_t *handle, int *device);
+	int (*ump_endpoint_info)(snd_ctl_t *handle, snd_ump_endpoint_info_t *info);
+	int (*ump_block_info)(snd_ctl_t *handle, snd_ump_block_info_t *info);
 	int (*set_power_state)(snd_ctl_t *handle, unsigned int state);
 	int (*get_power_state)(snd_ctl_t *handle, unsigned int *state);
 	int (*read)(snd_ctl_t *handle, snd_ctl_event_t *event);
@@ -62,6 +65,7 @@ struct _snd_ctl {
 	snd_ctl_type_t type;
 	const snd_ctl_ops_t *ops;
 	void *private_data;
+	int mode;
 	int nonblock;
 	int poll_fd;
 	struct list_head async_handlers;
@@ -81,7 +85,7 @@ struct _snd_hctl_elem {
 struct _snd_hctl {
 	snd_ctl_t *ctl;
 	struct list_head elems;		/* list of all controls */
-	unsigned int alloc;	
+	unsigned int alloc;
 	unsigned int count;
 	snd_hctl_elem_t **pelems;
 	snd_hctl_compare_t compare;
@@ -93,7 +97,7 @@ struct _snd_hctl {
 /* make local functions really local */
 #define snd_ctl_new	snd1_ctl_new
 
-int snd_ctl_new(snd_ctl_t **ctlp, snd_ctl_type_t type, const char *name);
+int snd_ctl_new(snd_ctl_t **ctlp, snd_ctl_type_t type, const char *name, int mode);
 int _snd_ctl_poll_descriptor(snd_ctl_t *ctl);
 #define _snd_ctl_async_descriptor _snd_ctl_poll_descriptor
 int snd_ctl_hw_open(snd_ctl_t **handle, const char *name, int card, int mode);

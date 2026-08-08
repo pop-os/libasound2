@@ -18,10 +18,11 @@
  *   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
-  
+
 #define SND_MASK_C
 #define SND_MASK_INLINE
 
+#include "config.h"
 #include <sys/types.h>
 #include <limits.h>
 #include "pcm_local.h"

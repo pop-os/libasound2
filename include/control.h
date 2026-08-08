@@ -25,8 +25,14 @@
  *
  */
 
+#if !defined(__ASOUNDLIB_H) && !defined(ALSA_LIBRARY_BUILD)
+/* don't use ALSA_LIBRARY_BUILD define in sources outside alsa-lib */
+#warning "use #include <alsa/asoundlib.h>, <alsa/control.h> should not be used directly"
+#include <alsa/asoundlib.h>
+#endif
+
 #ifndef __ALSA_CONTROL_H
-#define __ALSA_CONTROL_H
+#define __ALSA_CONTROL_H /**< header include loop protection */
 
 #ifdef __cplusplus
 extern "C" {
@@ -356,6 +362,9 @@ typedef enum _snd_ctl_type {
 /** Read only (flag for open mode) \hideinitializer */
 #define SND_CTL_READONLY		0x0004
 
+/** Return EINTR instead blocking (flag for open mode) \hideinitializer */
+#define SND_CTL_EINTR			0x0080
+
 /** CTL handle */
 typedef struct _snd_ctl snd_ctl_t;
 
@@ -371,17 +380,13 @@ int snd_card_get_index(const char *name);
 int snd_card_get_name(int card, char **name);
 int snd_card_get_longname(int card, char **name);
 
-int snd_device_name_hint(int card, const char *iface, void ***hints);
-int snd_device_name_free_hint(void **hints);
-char *snd_device_name_get_hint(const void *hint, const char *id);
-
 int snd_ctl_open(snd_ctl_t **ctl, const char *name, int mode);
 int snd_ctl_open_lconf(snd_ctl_t **ctl, const char *name, int mode, snd_config_t *lconf);
 int snd_ctl_open_fallback(snd_ctl_t **ctl, snd_config_t *root, const char *name, const char *orig_name, int mode);
 int snd_ctl_close(snd_ctl_t *ctl);
 int snd_ctl_nonblock(snd_ctl_t *ctl, int nonblock);
 static __inline__ int snd_ctl_abort(snd_ctl_t *ctl) { return snd_ctl_nonblock(ctl, 2); }
-int snd_async_add_ctl_handler(snd_async_handler_t **handler, snd_ctl_t *ctl, 
+int snd_async_add_ctl_handler(snd_async_handler_t **handler, snd_ctl_t *ctl,
 			      snd_async_callback_t callback, void *private_data);
 snd_ctl_t *snd_async_handler_get_ctl(snd_async_handler_t *handler);
 int snd_ctl_poll_descriptors_count(snd_ctl_t *ctl);
@@ -414,6 +419,11 @@ int snd_ctl_pcm_prefer_subdevice(snd_ctl_t *ctl, int subdev);
 int snd_ctl_rawmidi_next_device(snd_ctl_t *ctl, int * device);
 int snd_ctl_rawmidi_info(snd_ctl_t *ctl, snd_rawmidi_info_t * info);
 int snd_ctl_rawmidi_prefer_subdevice(snd_ctl_t *ctl, int subdev);
+#endif
+#ifdef __ALSA_UMP_H
+int snd_ctl_ump_next_device(snd_ctl_t *ctl, int *device);
+int snd_ctl_ump_endpoint_info(snd_ctl_t *ctl, snd_ump_endpoint_info_t *info);
+int snd_ctl_ump_block_info(snd_ctl_t *ctl, snd_ump_block_info_t *info);
 #endif
 int snd_ctl_set_power_state(snd_ctl_t *ctl, unsigned int state);
 int snd_ctl_get_power_state(snd_ctl_t *ctl, unsigned int *state);
@@ -708,7 +718,7 @@ typedef int (*snd_hctl_compare_t)(const snd_hctl_elem_t *e1,
 				  const snd_hctl_elem_t *e2);
 int snd_hctl_compare_fast(const snd_hctl_elem_t *c1,
 			  const snd_hctl_elem_t *c2);
-/** 
+/**
  * \brief HCTL callback function
  * \param hctl HCTL handle
  * \param mask event mask
@@ -718,7 +728,7 @@ int snd_hctl_compare_fast(const snd_hctl_elem_t *c1,
 typedef int (*snd_hctl_callback_t)(snd_hctl_t *hctl,
 				   unsigned int mask,
 				   snd_hctl_elem_t *elem);
-/** 
+/**
  * \brief HCTL element callback function
  * \param elem HCTL element
  * \param mask event mask
@@ -788,6 +798,20 @@ int snd_sctl_build(snd_sctl_t **ctl, snd_ctl_t *handle, snd_config_t *config,
 int snd_sctl_free(snd_sctl_t *handle);
 int snd_sctl_install(snd_sctl_t *handle);
 int snd_sctl_remove(snd_sctl_t *handle);
+
+/** \} */
+
+/**
+ *  \defgroup Hint Name Hint Interface
+ *  \ingroup Configuration
+ *  The name hint interface - get descriptive information about a device
+ *  (name, description, input/output).
+ *  \{
+ */
+
+int snd_device_name_hint(int card, const char *iface, void ***hints);
+int snd_device_name_free_hint(void **hints);
+char *snd_device_name_get_hint(const void *hint, const char *id);
 
 /** \} */
 

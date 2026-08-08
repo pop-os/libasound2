@@ -10,7 +10,7 @@
  *  Lesser General Public License for more details.
  *
  *  You should have received a copy of the GNU Lesser General Public
- *  License along with this library; if not, write to the Free Software  
+ *  License along with this library; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *  Support for the verb/device/modifier core logic and API,
@@ -30,17 +30,12 @@
  *               Jaroslav Kysela <perex@perex.cz>
  */
 
-
-
-#if 0
-#define UC_MGR_DEBUG
-#endif
-
 #include "local.h"
 #include <pthread.h>
+#include <stdbool.h>
 #include "use-case.h"
 
-#define SYNTAX_VERSION_MAX	6
+#define SYNTAX_VERSION_MAX	9
 
 #define MAX_CARD_SHORT_NAME	32
 #define MAX_CARD_LONG_NAME	80
@@ -62,9 +57,9 @@
 #define SEQUENCE_ELEMENT_TYPE_DEV_DISABLE_ALL	15
 
 struct ucm_value {
-        struct list_head list;
-        char *name;
-        char *data;
+	struct list_head list;
+	char *name;
+	char *data;
 };
 
 /* sequence of a component device */
@@ -170,6 +165,7 @@ struct use_case_device {
 	struct list_head active_list;
 
 	char *name;
+	char *orig_name;
 	char *comment;
 
 	/* device enable and disable sequences */
@@ -184,6 +180,15 @@ struct use_case_device {
 
 	/* value list */
 	struct list_head value_list;
+
+	/* cached priority for sorting (LONG_MIN if not determined) */
+	long sort_priority;
+
+	/* list of variant devices */
+	struct list_head variants;
+
+	/* list link for variant devices */
+	struct list_head variant_list;
 };
 
 /*
@@ -235,6 +240,8 @@ struct snd_use_case_mgr {
 	const char *parse_variant;
 	int parse_master_section;
 	int sequence_hops;
+	bool in_boot;
+	bool card_group;
 
 	/* UCM cards list */
 	struct list_head cards_list;
@@ -254,6 +261,9 @@ struct snd_use_case_mgr {
 
 	/* default settings - value list */
 	struct list_head value_list;
+
+	/* global value list */
+	struct list_head global_value_list;
 
 	/* current status */
 	struct use_case_verb *active_verb;
@@ -285,22 +295,14 @@ struct snd_use_case_mgr {
 	char *cdev;
 };
 
-#define uc_error SNDERR
-
-#ifdef UC_MGR_DEBUG
-#define uc_dbg SNDERR
-#else
-#define uc_dbg(fmt, arg...) do { } while (0)
-#endif
-
 void uc_mgr_error(const char *fmt, ...);
 void uc_mgr_stdout(const char *fmt, ...);
 
 const char *uc_mgr_sysfs_root(void);
 const char *uc_mgr_config_dir(int format);
-int uc_mgr_config_load_into(int format, const char *file, snd_config_t *cfg);
-int uc_mgr_config_load(int format, const char *file, snd_config_t **cfg);
-int uc_mgr_config_load_file(snd_use_case_mgr_t *uc_mgr,  const char *file, snd_config_t **cfg);
+int uc_mgr_config_load_into(int format, const char *file, snd_config_t *cfg, bool optional);
+int uc_mgr_config_load(int format, const char *file, snd_config_t **cfg, bool optional);
+int uc_mgr_config_load_file(snd_use_case_mgr_t *uc_mgr, const char *file, snd_config_t **cfg, bool optional);
 int uc_mgr_import_master_config(snd_use_case_mgr_t *uc_mgr);
 int uc_mgr_scan_master_configs(const char **_list[]);
 
@@ -317,8 +319,14 @@ void uc_mgr_free(snd_use_case_mgr_t *uc_mgr);
 
 static inline int uc_mgr_has_local_config(snd_use_case_mgr_t *uc_mgr)
 {
-	return uc_mgr && snd_config_iterator_first(uc_mgr->local_config) !=
+	return uc_mgr && uc_mgr->local_config &&
+			 snd_config_iterator_first(uc_mgr->local_config) !=
 			 snd_config_iterator_end(uc_mgr->local_config);
+}
+
+static inline const char *uc_mgr_enable_str(bool enable)
+{
+	return enable ? "enable" : "disable";
 }
 
 int uc_mgr_card_open(snd_use_case_mgr_t *uc_mgr);
@@ -335,17 +343,25 @@ struct ctl_list *uc_mgr_get_ctl_by_name(snd_use_case_mgr_t *uc_mgr,
 					const char *name, int idx);
 snd_ctl_t *uc_mgr_get_ctl(snd_use_case_mgr_t *uc_mgr);
 void uc_mgr_free_ctl_list(snd_use_case_mgr_t *uc_mgr);
+int uc_mgr_card_number(struct ctl_list *list);
+
+void uc_mgr_free_value(struct list_head *base);
 
 int uc_mgr_add_value(struct list_head *base, const char *key, char *val);
 
+int uc_mgr_check_value(struct list_head *value_list, const char *identifier);
+
 const char *uc_mgr_get_variable(snd_use_case_mgr_t *uc_mgr,
-				const char *name);
+				const char *name,
+				bool show_err);
 
 int uc_mgr_set_variable(snd_use_case_mgr_t *uc_mgr,
 			const char *name,
 			const char *val);
 
 int uc_mgr_delete_variable(snd_use_case_mgr_t *uc_mgr, const char *name);
+
+int uc_mgr_duplicate_variables(struct list_head *dst, struct list_head *src);
 
 int uc_mgr_get_substituted_value(snd_use_case_mgr_t *uc_mgr,
 				 char **_rvalue,
@@ -368,6 +384,9 @@ int uc_mgr_evaluate_include(snd_use_case_mgr_t *uc_mgr,
 int uc_mgr_evaluate_condition(snd_use_case_mgr_t *uc_mgr,
 			      snd_config_t *parent,
 			      snd_config_t *cond);
+
+int uc_mgr_evaluate_repeat(snd_use_case_mgr_t *uc_mgr,
+			    snd_config_t *cfg);
 
 int uc_mgr_define_regex(snd_use_case_mgr_t *uc_mgr,
 			const char *name,

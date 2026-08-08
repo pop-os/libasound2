@@ -43,39 +43,56 @@ static int include_eval_one(snd_use_case_mgr_t *uc_mgr,
 			    snd_config_t **before,
 			    snd_config_t **after)
 {
+	snd_config_t *opt;
 	const char *file;
+	bool opt_bool = false;
 	char *s;
 	int err;
 
 	*result = NULL;
 
 	if (snd_config_get_type(inc) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for Include.1");
+		snd_error(UCM, "compound type expected for Include.1");
 		return -EINVAL;
 	}
 
 	err = get_string(inc, "File", &file);
 	if (err < 0) {
-		uc_error("file expected (Include)");
+		snd_error(UCM, "file expected (Include)");
 		return -EINVAL;
 	}
 
 	err = snd_config_search(inc, "Before", before);
 	if (err < 0 && err != -ENOENT) {
-		uc_error("before block identifier error");
+		snd_error(UCM, "before block identifier error");
 		return -EINVAL;
 	}
 
 	err = snd_config_search(inc, "After", after);
 	if (err < 0 && err != -ENOENT) {
-		uc_error("before block identifier error");
+		snd_error(UCM, "before block identifier error");
 		return -EINVAL;
+	}
+
+	err = snd_config_search(inc, "Optional", &opt);
+	if (err < 0 && err != -ENOENT) {
+		snd_error(UCM, "optional error");
+		return -EINVAL;
+	} else if (err == 0) {
+		err = snd_config_get_bool(opt);
+		if (err < 0) {
+			snd_error(UCM, "optional format error");
+			return -EINVAL;
+		}
+		opt_bool = err > 0;
 	}
 
 	err = uc_mgr_get_substituted_value(uc_mgr, &s, file);
 	if (err < 0)
 		return err;
-	err = uc_mgr_config_load_file(uc_mgr, s, result);
+	err = uc_mgr_config_load_file(uc_mgr, s, result, opt_bool);
+	if (opt_bool && (err == -ENOENT || err == -EACCES))
+		err = 0;
 	free(s);
 	return err;
 }
@@ -144,7 +161,7 @@ static int compound_merge(snd_use_case_mgr_t *uc_mgr, const char *id,
 	int err, array, idx;
 
 	if (snd_config_get_type(src) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for the merged block");
+		snd_error(UCM, "compound type expected for the merged block");
 		return -EINVAL;
 	}
 
@@ -164,17 +181,17 @@ static int compound_merge(snd_use_case_mgr_t *uc_mgr, const char *id,
 		return snd_config_merge(dst, src, 0);	/* merge / append mode */
 
 	if (_before && _after) {
-		uc_error("defined both before and after identifiers in the If or Include block");
+		snd_error(UCM, "defined both before and after identifiers in the If or Include block");
 		return -EINVAL;
 	}
 
 	array = snd_config_is_array(dst);
 	if (array < 0) {
-		uc_error("destination configuration node is not a compound");
+		snd_error(UCM, "destination configuration node is not a compound");
 		return array;
 	}
 	if (array && snd_config_is_array(src) <= 0) {
-		uc_error("source configuration node is not an array");
+		snd_error(UCM, "source configuration node is not an array");
 		return -EINVAL;
 	}
 
@@ -287,12 +304,12 @@ int uc_mgr_evaluate_include(snd_use_case_mgr_t *uc_mgr,
 	int err;
 
 	if (uc_mgr->conf_format < 3) {
-		uc_error("in-place include is supported in v3+ syntax");
+		snd_error(UCM, "in-place include is supported in v3+ syntax");
 		return -EINVAL;
 	}
 
 	if (snd_config_get_type(inc) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for Include");
+		snd_error(UCM, "compound type expected for Include");
 		return -EINVAL;
 	}
 

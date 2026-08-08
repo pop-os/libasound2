@@ -25,7 +25,8 @@
  *   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
-  
+
+#include "pcm_local.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -71,7 +72,7 @@ static long snd_pcm_shm_action_fd0(snd_pcm_t *pcm, int *fd)
 	if (err != 1)
 		return -EBADFD;
 	if (ctrl->cmd) {
-		SNDERR("Server has not done the cmd");
+		snd_error(PCM, "Server has not done the cmd");
 		return -EBADFD;
 	}
 	return ctrl->result;
@@ -90,7 +91,7 @@ static int snd_pcm_shm_new_rbptr(snd_pcm_t *pcm, snd_pcm_shm_t *shm,
 		size_t mmap_size, mmap_offset, offset;
 		int fd;
 		long result;
-		
+
 		shm->ctrl->cmd = &pcm->hw == rbptr ? SND_PCM_IOCTL_HW_PTR_FD : SND_PCM_IOCTL_APPL_PTR_FD;
 		result = snd_pcm_shm_action_fd0(pcm, &fd);
 		if (result < 0)
@@ -98,7 +99,7 @@ static int snd_pcm_shm_new_rbptr(snd_pcm_t *pcm, snd_pcm_shm_t *shm,
 		mmap_size = page_ptr(shm_rbptr->offset, sizeof(snd_pcm_uframes_t), &offset, &mmap_offset);
 		ptr = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_FILE|MAP_SHARED, fd, mmap_offset);
 		if (ptr == MAP_FAILED || ptr == NULL) {
-			SYSERR("shm rbptr mmap failed");
+			snd_errornum(PCM, "shm rbptr mmap failed");
 			return -errno;
 		}
 		if (&pcm->hw == rbptr)
@@ -125,7 +126,7 @@ static long snd_pcm_shm_action(snd_pcm_t *pcm)
 	if (err != 1)
 		return -EBADFD;
 	if (ctrl->cmd) {
-		SNDERR("Server has not done the cmd");
+		snd_error(PCM, "Server has not done the cmd");
 		return -EBADFD;
 	}
 	result = ctrl->result;
@@ -160,7 +161,7 @@ static long snd_pcm_shm_action_fd(snd_pcm_t *pcm, int *fd)
 	if (err != 1)
 		return -EBADFD;
 	if (ctrl->cmd) {
-		SNDERR("Server has not done the cmd");
+		snd_error(PCM, "Server has not done the cmd");
 		return -EBADFD;
 	}
 	if (ctrl->hw.changed) {
@@ -239,7 +240,7 @@ static int snd_pcm_shm_hw_refine_schange(snd_pcm_t *pcm ATTRIBUTE_UNUSED, snd_pc
 		return err;
 	return 0;
 }
-	
+
 static int snd_pcm_shm_hw_refine_cchange(snd_pcm_t *pcm ATTRIBUTE_UNUSED, snd_pcm_hw_params_t *params,
 					  snd_pcm_hw_params_t *sparams)
 {
@@ -282,7 +283,7 @@ static int snd_pcm_shm_hw_refine(snd_pcm_t *pcm, snd_pcm_hw_params_t *params)
 				       snd_pcm_shm_hw_refine_slave);
 }
 
-static int snd_pcm_shm_hw_params_slave(snd_pcm_t *pcm, 
+static int snd_pcm_shm_hw_params_slave(snd_pcm_t *pcm,
 				       snd_pcm_hw_params_t *params)
 {
 	snd_pcm_shm_t *shm = pcm->private_data;
@@ -322,8 +323,6 @@ static int snd_pcm_shm_sw_params(snd_pcm_t *pcm, snd_pcm_sw_params_t * params)
 	ctrl->u.sw_params = *params;
 	err = snd_pcm_shm_action(pcm);
 	*params = ctrl->u.sw_params;
-	if (err < 0)
-		return err;
 	return err;
 }
 
@@ -353,7 +352,7 @@ static int snd_pcm_shm_munmap(snd_pcm_t *pcm)
 		}
 		err = close(i->u.mmap.fd);
 		if (err < 0) {
-			SYSERR("close failed");
+			snd_errornum(PCM, "close failed");
 			return -errno;
 		}
 	}
@@ -436,8 +435,6 @@ static snd_pcm_sframes_t snd_pcm_shm_avail_update(snd_pcm_t *pcm)
 	int err;
 	ctrl->cmd = SND_PCM_IOCTL_AVAIL_UPDATE;
 	err = snd_pcm_shm_action(pcm);
-	if (err < 0)
-		return err;
 	return err;
 }
 
@@ -495,7 +492,7 @@ static int snd_pcm_shm_drain(snd_pcm_t *pcm)
 	if (err < 0)
 		return err;
 	if (!(pcm->mode & SND_PCM_NONBLOCK))
-		snd_pcm_wait(pcm, -1);
+		snd_pcm_wait(pcm, SND_PCM_WAIT_DRAIN);
 	return err;
 }
 
@@ -636,20 +633,22 @@ static int make_local_socket(const char *filename)
 	size_t l = strlen(filename);
 	size_t size = offsetof(struct sockaddr_un, sun_path) + l;
 	struct sockaddr_un *addr = alloca(size);
-	int sock;
+	int sock, err;
 
 	sock = socket(PF_LOCAL, SOCK_STREAM, 0);
 	if (sock < 0) {
-		SYSERR("socket failed");
+		snd_errornum(PCM, "socket failed");
 		return -errno;
 	}
-	
+
 	addr->sun_family = AF_LOCAL;
 	memcpy(addr->sun_path, filename, l);
 
 	if (connect(sock, (struct sockaddr *) addr, size) < 0) {
-		SYSERR("connect failed");
-		return -errno;
+		err = -errno;
+		snd_errornum(PCM, "connect failed");
+		close(sock);
+		return err;
 	}
 	return sock;
 }
@@ -686,7 +685,7 @@ int snd_pcm_shm_open(snd_pcm_t **pcmp, const char *name,
 
 	result = make_local_socket(sockname);
 	if (result < 0) {
-		SNDERR("server for socket %s is not running", sockname);
+		snd_error(PCM, "server for socket %s is not running", sockname);
 		goto _err;
 	}
 	sock = result;
@@ -701,23 +700,28 @@ int snd_pcm_shm_open(snd_pcm_t **pcmp, const char *name,
 	req->namelen = snamelen;
 	err = write(sock, req, reqlen);
 	if (err < 0) {
-		SYSERR("write error");
+		snd_errornum(PCM, "write error");
 		result = -errno;
 		goto _err;
 	}
 	if ((size_t) err != reqlen) {
-		SNDERR("write size error");
+		snd_error(PCM, "write size error");
 		result = -EINVAL;
 		goto _err;
 	}
 	err = read(sock, &ans, sizeof(ans));
 	if (err < 0) {
-		SYSERR("read error");
+		snd_errornum(PCM, "read error");
 		result = -errno;
 		goto _err;
 	}
 	if (err != sizeof(ans)) {
-		SNDERR("read size error");
+		snd_error(PCM, "read size error");
+		result = -EINVAL;
+		goto _err;
+	}
+	if (ans.result < INT_MIN || ans.result > INT_MAX) {
+		snd_error(PCM, "invalid read");
 		result = -EINVAL;
 		goto _err;
 	}
@@ -727,11 +731,11 @@ int snd_pcm_shm_open(snd_pcm_t **pcmp, const char *name,
 
 	ctrl = shmat(ans.cookie, 0, 0);
 	if (!ctrl) {
-		SYSERR("shmat error");
+		snd_errornum(PCM, "shmat error");
 		result = -errno;
 		goto _err;
 	}
-		
+
 	shm = calloc(1, sizeof(snd_pcm_shm_t));
 	if (!shm) {
 		result = -ENOMEM;
@@ -763,7 +767,8 @@ int snd_pcm_shm_open(snd_pcm_t **pcmp, const char *name,
 	return 0;
 
  _err:
-	close(sock);
+	if (sock >= 0)
+		close(sock);
 	if (ctrl)
 		shmdt(ctrl);
 	free(shm);
@@ -780,7 +785,7 @@ performance.
 
 \code
 pcm.name {
-        type shm                # Shared memory PCM
+	type shm                # Shared memory PCM
 	server STR		# Server name
 	pcm STR			# PCM name
 }
@@ -829,7 +834,7 @@ int _snd_pcm_shm_open(snd_pcm_t **pcmp, const char *name,
 		if (strcmp(id, "server") == 0) {
 			err = snd_config_get_string(n, &server);
 			if (err < 0) {
-				SNDERR("Invalid type for %s", id);
+				snd_error(PCM, "Invalid type for %s", id);
 				return -EINVAL;
 			}
 			continue;
@@ -837,29 +842,29 @@ int _snd_pcm_shm_open(snd_pcm_t **pcmp, const char *name,
 		if (strcmp(id, "pcm") == 0) {
 			err = snd_config_get_string(n, &pcm_name);
 			if (err < 0) {
-				SNDERR("Invalid type for %s", id);
+				snd_error(PCM, "Invalid type for %s", id);
 				return -EINVAL;
 			}
 			continue;
 		}
-		SNDERR("Unknown field %s", id);
+		snd_error(PCM, "Unknown field %s", id);
 		return -EINVAL;
 	}
 	if (!pcm_name) {
-		SNDERR("pcm is not defined");
+		snd_error(PCM, "pcm is not defined");
 		return -EINVAL;
 	}
 	if (!server) {
-		SNDERR("server is not defined");
+		snd_error(PCM, "server is not defined");
 		return -EINVAL;
 	}
 	err = snd_config_search_definition(root, "server", server, &sconfig);
 	if (err < 0) {
-		SNDERR("Unknown server %s", server);
+		snd_error(PCM, "Unknown server %s", server);
 		return -EINVAL;
 	}
 	if (snd_config_get_type(sconfig) != SND_CONFIG_TYPE_COMPOUND) {
-		SNDERR("Invalid type for server %s definition", server);
+		snd_error(PCM, "Invalid type for server %s definition", server);
 		goto _err;
 	}
 	snd_config_for_each(i, next, sconfig) {
@@ -874,7 +879,7 @@ int _snd_pcm_shm_open(snd_pcm_t **pcmp, const char *name,
 		if (strcmp(id, "socket") == 0) {
 			err = snd_config_get_string(n, &sockname);
 			if (err < 0) {
-				SNDERR("Invalid type for %s", id);
+				snd_error(PCM, "Invalid type for %s", id);
 				goto _err;
 			}
 			continue;
@@ -882,19 +887,19 @@ int _snd_pcm_shm_open(snd_pcm_t **pcmp, const char *name,
 		if (strcmp(id, "port") == 0) {
 			err = snd_config_get_integer(n, &port);
 			if (err < 0) {
-				SNDERR("Invalid type for %s", id);
+				snd_error(PCM, "Invalid type for %s", id);
 				goto _err;
 			}
 			continue;
 		}
-		SNDERR("Unknown field %s", id);
+		snd_error(PCM, "Unknown field %s", id);
 	       _err:
 		err = -EINVAL;
 		goto __error;
 	}
 
 	if (!sockname) {
-		SNDERR("socket is not defined");
+		snd_error(PCM, "socket is not defined");
 		goto _err;
 	}
 	err = snd_pcm_shm_open(pcmp, name, sockname, pcm_name, stream, mode);

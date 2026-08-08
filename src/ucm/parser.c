@@ -10,7 +10,7 @@
  *  Lesser General Public License for more details.
  *
  *  You should have received a copy of the GNU Lesser General Public
- *  License along with this library; if not, write to the Free Software  
+ *  License along with this library; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *  Support for the verb/device/modifier core logic and API,
@@ -34,6 +34,7 @@
 #include <sys/stat.h>
 #include <stdbool.h>
 #include <dirent.h>
+#include <ctype.h>
 #include <limits.h>
 
 static int filename_filter(const struct dirent64 *dirent);
@@ -65,7 +66,7 @@ static void ucm_filename(char *fn, size_t fn_len, long version,
  *
  */
 int uc_mgr_config_load_file(snd_use_case_mgr_t *uc_mgr,
-			     const char *file, snd_config_t **cfg)
+			     const char *file, snd_config_t **cfg, bool optional)
 {
 	char filename[PATH_MAX];
 	int err;
@@ -73,9 +74,10 @@ int uc_mgr_config_load_file(snd_use_case_mgr_t *uc_mgr,
 	ucm_filename(filename, sizeof(filename), uc_mgr->conf_format,
 		     file[0] == '/' ? NULL : uc_mgr->conf_dir_name,
 		     file);
-	err = uc_mgr_config_load(uc_mgr->conf_format, filename, cfg);
+	err = uc_mgr_config_load(uc_mgr->conf_format, filename, cfg, optional);
 	if (err < 0) {
-		uc_error("error: failed to open file %s: %d", filename, err);
+		if (!optional || (err != -ENOENT && err != -EACCES))
+			snd_error(UCM, "failed to open file %s: %d", filename, err);
 		return err;
 	}
 	return 0;
@@ -94,7 +96,7 @@ static char *replace_string(char **dst, const char *value)
 /*
  * Parse string
  */
-int parse_string(snd_config_t *n, char **res)
+static int parse_string(snd_config_t *n, char **res)
 {
 	int err;
 
@@ -110,7 +112,7 @@ int parse_string(snd_config_t *n, char **res)
 /*
  * Parse string and substitute
  */
-int parse_string_substitute(snd_use_case_mgr_t *uc_mgr,
+static int parse_string_substitute(snd_use_case_mgr_t *uc_mgr,
 			    snd_config_t *n, char **res)
 {
 	const char *str;
@@ -129,7 +131,7 @@ int parse_string_substitute(snd_use_case_mgr_t *uc_mgr,
 /*
  * Parse string and substitute
  */
-int parse_string_substitute3(snd_use_case_mgr_t *uc_mgr,
+static int parse_string_substitute3(snd_use_case_mgr_t *uc_mgr,
 			     snd_config_t *n, char **res)
 {
 	if (uc_mgr->conf_format < 3)
@@ -140,7 +142,7 @@ int parse_string_substitute3(snd_use_case_mgr_t *uc_mgr,
 /*
  * Parse integer with substitution
  */
-int parse_integer_substitute(snd_use_case_mgr_t *uc_mgr,
+static int parse_integer_substitute(snd_use_case_mgr_t *uc_mgr,
 			     snd_config_t *n, long *res)
 {
 	char *s1, *s2;
@@ -160,7 +162,7 @@ int parse_integer_substitute(snd_use_case_mgr_t *uc_mgr,
 /*
  * Parse integer with substitution
  */
-int parse_integer_substitute3(snd_use_case_mgr_t *uc_mgr,
+static int parse_integer_substitute3(snd_use_case_mgr_t *uc_mgr,
 			      snd_config_t *n, long *res)
 {
 	char *s1, *s2;
@@ -184,16 +186,16 @@ int parse_integer_substitute3(snd_use_case_mgr_t *uc_mgr,
 /*
  * Parse safe ID
  */
-int parse_is_name_safe(const char *name)
+static int parse_is_name_safe(const char *name)
 {
 	if (strchr(name, '.')) {
-		uc_error("char '.' not allowed in '%s'", name);
+		snd_error(UCM, "char '.' not allowed in '%s'", name);
 		return 0;
 	}
 	return 1;
 }
 
-int get_string3(snd_use_case_mgr_t *uc_mgr, const char *s1, char **s)
+static int get_string3(snd_use_case_mgr_t *uc_mgr, const char *s1, char **s)
 {
 	if (uc_mgr->conf_format < 3) {
 		*s = strdup(s1);
@@ -204,7 +206,7 @@ int get_string3(snd_use_case_mgr_t *uc_mgr, const char *s1, char **s)
 	return uc_mgr_get_substituted_value(uc_mgr, s, s1);
 }
 
-int parse_get_safe_name(snd_use_case_mgr_t *uc_mgr, snd_config_t *n,
+static int parse_get_safe_name(snd_use_case_mgr_t *uc_mgr, snd_config_t *n,
 			const char *alt, char **name)
 {
 	const char *id;
@@ -228,6 +230,66 @@ int parse_get_safe_name(snd_use_case_mgr_t *uc_mgr, snd_config_t *n,
 }
 
 /*
+ * Parse device index from device name
+ * According to use-case.h specification, device names can have numeric suffixes
+ * like HDMI1, HDMI2, or "Line 1", "Line 2".
+ * This function extracts the index and modifies the name to contain only the base.
+ */
+static int parse_device_index(char **name, int *index)
+{
+	char *p, *num_start;
+	long idx;
+	size_t len;
+	int err;
+
+	if (!name || !*name || !index)
+		return -EINVAL;
+
+	len = strlen(*name);
+	if (len == 0)
+		return -EINVAL;
+
+	/* Start from the end and find where digits begin */
+	p = *name + len - 1;
+
+	/* Skip trailing digits */
+	while (p > *name && isdigit(*p))
+		p--;
+
+	/* If no digits found at the end, index is 0 (no index) */
+	if (p == *name + len - 1) {
+		*index = 0;
+		return 0;
+	}
+
+	/* Move to first digit */
+	p++;
+
+	/* Check if there's an optional space before the number */
+	if (p > *name && *(p - 1) == ' ')
+		p--;
+
+	/* Parse the index */
+	num_start = *p == ' ' ? p + 1 : p;
+	err = safe_strtol(num_start, &idx);
+	if (err < 0) {
+		/* No valid number found */
+		*index = 0;
+		return 0;
+	}
+
+	*index = (int)idx;
+
+	/* Truncate the name to remove the index part */
+	if (*p == ' ')
+		*p = '\0';  /* Remove space and number */
+	else if (p > *name)
+		*p = '\0';  /* Remove number only */
+
+	return 0;
+}
+
+/*
  * Handle 'Error' configuration node.
  */
 static int error_node(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
@@ -237,11 +299,11 @@ static int error_node(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 
 	err = parse_string_substitute3(uc_mgr, cfg, &s);
 	if (err < 0) {
-		uc_error("error: failed to get Error string");
+		snd_error(UCM, "failed to get Error string");
 		return err;
 	}
 	if (!uc_mgr->suppress_nodev_errors)
-		uc_error("%s", s);
+		snd_error(UCM, "%s", s);
 	free(s);
 	return -ENXIO;
 }
@@ -258,16 +320,16 @@ static int parse_syntax_field(snd_use_case_mgr_t *uc_mgr,
 
 	err = snd_config_search(cfg, "Syntax", &n);
 	if (err < 0) {
-		uc_error("Syntax field not found in %s", filename);
+		snd_error(UCM, "Syntax field not found in %s", filename);
 		return -EINVAL;
 	}
 	err = snd_config_get_integer(n, &l);
 	if (err < 0) {
-		uc_error("Syntax field is invalid in %s", filename);
+		snd_error(UCM, "Syntax field is invalid in %s", filename);
 		return err;
 	}
 	if (l < 2 || l > SYNTAX_VERSION_MAX) {
-		uc_error("Incompatible syntax %ld in %s", l, filename);
+		snd_error(UCM, "Incompatible syntax %ld in %s", l, filename);
 		return -EINVAL;
 	}
 	/* delete this field to optimize strcmp() call in the parsing loop */
@@ -294,12 +356,12 @@ static int evaluate_regex(snd_use_case_mgr_t *uc_mgr,
 		return err;
 
 	if (snd_config_get_type(d) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for DefineRegex");
+		snd_error(UCM, "compound type expected for DefineRegex");
 		return -EINVAL;
 	}
 
 	if (uc_mgr->conf_format < 3) {
-		uc_error("DefineRegex is supported in v3+ syntax");
+		snd_error(UCM, "DefineRegex is supported in v3+ syntax");
 		return -EINVAL;
 	}
 
@@ -309,7 +371,7 @@ static int evaluate_regex(snd_use_case_mgr_t *uc_mgr,
 		if (err < 0)
 			return err;
 		if (id[0] == '@') {
-			uc_error("error: value names starting with '@' are reserved for application variables");
+			snd_error(UCM, "value names starting with '@' are reserved for application variables");
 			return -EINVAL;
 		}
 		err = uc_mgr_define_regex(uc_mgr, id, n);
@@ -330,7 +392,7 @@ static int evaluate_define(snd_use_case_mgr_t *uc_mgr,
 	snd_config_iterator_t i, next;
 	snd_config_t *d, *n;
 	const char *id;
-	char *var, *s;
+	char *var, *s, *sid;
 	int err;
 
 	err = snd_config_search(cfg, "Define", &d);
@@ -340,12 +402,12 @@ static int evaluate_define(snd_use_case_mgr_t *uc_mgr,
 		return err;
 
 	if (snd_config_get_type(d) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for Define");
+		snd_error(UCM, "compound type expected for Define");
 		return -EINVAL;
 	}
 
 	if (uc_mgr->conf_format < 3) {
-		uc_error("Define is supported in v3+ syntax");
+		snd_error(UCM, "Define is supported in v3+ syntax");
 		return -EINVAL;
 	}
 
@@ -363,11 +425,21 @@ static int evaluate_define(snd_use_case_mgr_t *uc_mgr,
 			return err;
 		if (id[0] == '@') {
 			free(s);
-			uc_error("error: value names starting with '@' are reserved for application variables");
+			snd_error(UCM, "value names starting with '@' are reserved for application variables");
 			return -EINVAL;
 		}
-		err = uc_mgr_set_variable(uc_mgr, id, s);
+		sid = (char *)id;
+		if (uc_mgr->conf_format >= 9) {
+			err = uc_mgr_get_substituted_value(uc_mgr, &sid, id);
+			if (err < 0) {
+				free(s);
+				return err;
+			}
+		}
+		err = uc_mgr_set_variable(uc_mgr, sid, s);
 		free(s);
+		if (id != sid)
+			free(sid);
 		if (err < 0)
 			return err;
 	}
@@ -393,18 +465,19 @@ static int evaluate_define_macro(snd_use_case_mgr_t *uc_mgr,
 		return err;
 
 	if (snd_config_get_type(d) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for DefineMacro");
+		snd_error(UCM, "compound type expected for DefineMacro");
 		return -EINVAL;
 	}
 
 	if (uc_mgr->conf_format < 6) {
-		uc_error("DefineMacro is supported in v6+ syntax");
+		snd_error(UCM, "DefineMacro is supported in v6+ syntax");
 		return -EINVAL;
 	}
 
 	err = snd_config_merge(uc_mgr->macros, d, 0);
 	if (err < 0)
 		return err;
+
 	return 0;
 }
 
@@ -415,7 +488,7 @@ static int evaluate_macro1(snd_use_case_mgr_t *uc_mgr,
 	snd_config_iterator_t i, next;
 	snd_config_t *m, *mc, *a, *n;
 	const char *mid, *id;
-	char name[128], *var;
+	char name[128], *var, *var2;
 	const char *s;
 	int err;
 
@@ -424,7 +497,7 @@ static int evaluate_macro1(snd_use_case_mgr_t *uc_mgr,
 		return err;
 	err = snd_config_search(uc_mgr->macros, mid, &m);
 	if (err < 0) {
-		uc_error("Macro '%s' is not defined", mid);
+		snd_error(UCM, "Macro '%s' is not defined", mid);
 		return err;
 	}
 
@@ -433,7 +506,15 @@ static int evaluate_macro1(snd_use_case_mgr_t *uc_mgr,
 		err = snd_config_get_string(args, &s);
 		if (err < 0)
 			return err;
-		err = snd_config_load_string(&a, s, 0);
+		if (uc_mgr->conf_format < 9) {
+			err = snd_config_load_string(&a, s, 0);
+		} else {
+			err = uc_mgr_get_substituted_value(uc_mgr, &var2, s);
+			if (err >= 0) {
+				err = snd_config_load_string(&a, var2, 0);
+				free(var2);
+			}
+		}
 		if (err < 0)
 			return err;
 	} else if (snd_config_get_type(args) != SND_CONFIG_TYPE_COMPOUND) {
@@ -446,12 +527,25 @@ static int evaluate_macro1(snd_use_case_mgr_t *uc_mgr,
 		err = snd_config_get_id(n, &id);
 		if (err < 0)
 			goto __err_path;
+		snprintf(name, sizeof(name), "__%s", id);
+		if (uc_mgr_get_variable(uc_mgr, name, false)) {
+			snd_error(UCM, "Macro argument '%s' is already defined", name);
+			goto __err_path;
+		}
 		err = snd_config_get_ascii(n, &var);
 		if (err < 0)
 			goto __err_path;
-		snprintf(name, sizeof(name), "__%s", id);
-		err = uc_mgr_set_variable(uc_mgr, name, var);
-		free(var);
+		if (uc_mgr->conf_format < 7) {
+			err = uc_mgr_set_variable(uc_mgr, name, var);
+			free(var);
+		} else {
+			err = uc_mgr_get_substituted_value(uc_mgr, &var2, var);
+			free(var);
+			if (err >= 0) {
+				err = uc_mgr_set_variable(uc_mgr, name, var2);
+				free(var2);
+			}
+		}
 		if (err < 0)
 			goto __err_path;
 	}
@@ -507,12 +601,12 @@ static int evaluate_macro(snd_use_case_mgr_t *uc_mgr,
 		return err;
 
 	if (snd_config_get_type(d) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for DefineMacro");
+		snd_error(UCM, "compound type expected for DefineMacro");
 		return -EINVAL;
 	}
 
 	if (uc_mgr->conf_format < 6) {
-		uc_error("Macro is supported in v6+ syntax");
+		snd_error(UCM, "Macro is supported in v6+ syntax");
 		return -EINVAL;
 	}
 
@@ -522,7 +616,7 @@ static int evaluate_macro(snd_use_case_mgr_t *uc_mgr,
 			const char *id;
 			if (snd_config_get_id(n, &id))
 				id = "";
-			uc_error("compound type expected for Macro.%s", id);
+			snd_error(UCM, "compound type expected for Macro.%s", id);
 			return -EINVAL;
 		}
 		snd_config_for_each(i2, next2, n) {
@@ -594,7 +688,7 @@ static int evaluate_variant(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 		return err;
 
 	if (uc_mgr->conf_format < 6) {
-		uc_error("Variant is supported in v6+ syntax");
+		snd_error(UCM, "Variant is supported in v6+ syntax");
 		return -EINVAL;
 	}
 
@@ -636,11 +730,11 @@ int uc_mgr_evaluate_inplace(snd_use_case_mgr_t *uc_mgr,
 			    snd_config_t *cfg)
 {
 	long iterations = 10000;
-	int err1 = 0, err2 = 0, err3 = 0, err4 = 0, err5 = 0;
+	int err1 = 0, err2 = 0, err3 = 0, err4 = 0, err5 = 0, err6 = 0;
 
-	while (err1 == 0 || err2 == 0 || err3 == 0 || err4 == 0 || err5 == 0) {
+	while (err1 == 0 || err2 == 0 || err3 == 0 || err4 == 0 || err5 == 0 || err6 == 0) {
 		if (iterations == 0) {
-			uc_error("Maximal inplace evaluation iterations number reached (recursive references?)");
+			snd_error(UCM, "Maximal inplace evaluation iterations number reached (recursive references?)");
 			return -EINVAL;
 		}
 		iterations--;
@@ -663,7 +757,7 @@ int uc_mgr_evaluate_inplace(snd_use_case_mgr_t *uc_mgr,
 			continue;
 		uc_mgr->macro_hops++;
 		if (uc_mgr->macro_hops > 100) {
-			uc_error("Maximal macro hops reached!");
+			snd_error(UCM, "Maximal macro hops reached!");
 			return -EINVAL;
 		}
 		err4 = evaluate_macro(uc_mgr, cfg);
@@ -672,9 +766,12 @@ int uc_mgr_evaluate_inplace(snd_use_case_mgr_t *uc_mgr,
 			return err4;
 		if (err4 == 0)
 			continue;
-		err5 = evaluate_condition(uc_mgr, cfg);
+		err5 = uc_mgr_evaluate_repeat(uc_mgr, cfg);
 		if (err5 < 0)
 			return err5;
+		err6 = evaluate_condition(uc_mgr, cfg);
+		if (err6 < 0)
+			return err6;
 	}
 	return 0;
 }
@@ -694,7 +791,7 @@ static int parse_libconfig1(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 		return -EINVAL;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for %s", id);
+		snd_error(UCM, "compound type expected for %s", id);
 		return -EINVAL;
 	}
 
@@ -722,14 +819,14 @@ static int parse_libconfig1(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 			continue;
 		}
 
-		uc_error("unknown field %s", id);
+		snd_error(UCM, "unknown field %s", id);
 		return -EINVAL;
 	}
 
 	if (file) {
 		if (substfile) {
 			snd_config_t *cfg;
-			err = uc_mgr_config_load(uc_mgr->conf_format, file, &cfg);
+			err = uc_mgr_config_load_file(uc_mgr, file, &cfg, false);
 			if (err < 0)
 				return err;
 			err = uc_mgr_substitute_tree(uc_mgr, cfg);
@@ -748,7 +845,7 @@ static int parse_libconfig1(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 			ucm_filename(filename, sizeof(filename), uc_mgr->conf_format,
 				     file[0] == '/' ? NULL : uc_mgr->conf_dir_name,
 				     file);
-			err = uc_mgr_config_load_into(uc_mgr->conf_format, filename, uc_mgr->local_config);
+			err = uc_mgr_config_load_into(uc_mgr->conf_format, filename, uc_mgr->local_config, false);
 			if (err < 0)
 				return err;
 		}
@@ -782,7 +879,7 @@ static int parse_libconfig(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 		return -EINVAL;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for %s", id);
+		snd_error(UCM, "compound type expected for %s", id);
 		return -EINVAL;
 	}
 
@@ -814,7 +911,7 @@ static int parse_transition(snd_use_case_mgr_t *uc_mgr,
 		return -EINVAL;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for %s", id);
+		snd_error(UCM, "compound type expected for %s", id);
 		return -EINVAL;
 	}
 
@@ -834,7 +931,7 @@ static int parse_transition(snd_use_case_mgr_t *uc_mgr,
 			free(tseq);
 			return err;
 		}
-	
+
 		err = parse_sequence(uc_mgr, &tseq->transition_list, n);
 		if (err < 0) {
 			uc_mgr_free_transition_element(tseq);
@@ -860,9 +957,9 @@ static int parse_compound(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg,
 
 	if (snd_config_get_id(cfg, &id) < 0)
 		return -EINVAL;
-	
+
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for %s", id);
+		snd_error(UCM, "compound type expected for %s", id);
 		return -EINVAL;
 	}
 	/* parse compound */
@@ -870,10 +967,10 @@ static int parse_compound(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg,
 		n = snd_config_iterator_entry(i);
 
 		if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-			uc_error("compound type expected for %s, is %d", id, snd_config_get_type(cfg));
+			snd_error(UCM, "compound type expected for %s, is %d", id, snd_config_get_type(cfg));
 			return -EINVAL;
 		}
-		
+
 		err = fcn(uc_mgr, n, data1, data2);
 		if (err < 0)
 			return err;
@@ -888,8 +985,9 @@ static int strip_legacy_dev_index(char *name)
 	if (!dot)
 		return 0;
 	if (dot[1] != '0' || dot[2] != '\0') {
-		uc_error("device name %s contains a '.',"
-			 " and is not legacy foo.0 format", name);
+		snd_error(UCM, "device name %s contains a '.',"
+			       " and is not legacy foo.0 format", name);
+
 		return -EINVAL;
 	}
 	*dot = '\0';
@@ -911,8 +1009,8 @@ static int parse_device_list(snd_use_case_mgr_t *uc_mgr ATTRIBUTE_UNUSED,
 	int err;
 
 	if (dev_list->type != DEVLIST_NONE) {
-		uc_error("error: multiple supported or"
-			" conflicting device lists");
+		snd_error(UCM, "multiple supported or conflicting device lists");
+
 		return -EEXIST;
 	}
 
@@ -920,7 +1018,7 @@ static int parse_device_list(snd_use_case_mgr_t *uc_mgr ATTRIBUTE_UNUSED,
 		return -EINVAL;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for %s", id);
+		snd_error(UCM, "compound type expected for %s", id);
 		return -EINVAL;
 	}
 
@@ -1018,7 +1116,7 @@ static int parse_component_seq(snd_use_case_mgr_t *uc_mgr,
 
 	cmpt_seq->device = find_component_dev(uc_mgr, val);
 	if (!cmpt_seq->device) {
-		uc_error("error: Cannot find component device %s", val);
+		snd_error(UCM, "Cannot find component device %s", val);
 		free(val);
 		return -EINVAL;
 	}
@@ -1059,7 +1157,7 @@ static int parse_sequence(snd_use_case_mgr_t *uc_mgr,
 	const char *cmd = NULL;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("error: compound is expected for sequence definition");
+		snd_error(UCM, "compound is expected for sequence definition");
 		return -EINVAL;
 	}
 
@@ -1072,10 +1170,12 @@ static int parse_sequence(snd_use_case_mgr_t *uc_mgr,
 			continue;
 		if (idx == 1) {
 			if (snd_config_get_type(n) != SND_CONFIG_TYPE_STRING) {
-				uc_error("error: string type is expected for sequence command");
+				snd_error(UCM, "string type is expected for sequence command");
 				return -EINVAL;
 			}
-			snd_config_get_string(n, &cmd);
+			err = snd_config_get_string(n, &cmd);
+			if (err < 0)
+				return err;
 			continue;
 		}
 
@@ -1089,7 +1189,7 @@ static int parse_sequence(snd_use_case_mgr_t *uc_mgr,
 			curr->type = SEQUENCE_ELEMENT_TYPE_CDEV;
 			err = parse_string_substitute3(uc_mgr, n, &curr->data.cdev);
 			if (err < 0) {
-				uc_error("error: cdev requires a string!");
+				snd_error(UCM, "cdev requires a string!");
 				return err;
 			}
 			continue;
@@ -1100,7 +1200,7 @@ static int parse_sequence(snd_use_case_mgr_t *uc_mgr,
 cset:
 			err = parse_string_substitute3(uc_mgr, n, &curr->data.cset);
 			if (err < 0) {
-				uc_error("error: %s requires a string!", cmd);
+				snd_error(UCM, "%s requires a string!", cmd);
 				return err;
 			}
 			continue;
@@ -1114,7 +1214,7 @@ cset:
 						strcmp(cmd, "enadev") == 0,
 						&curr->data.cmpt_seq);
 			if (err < 0) {
-				uc_error("error: %s requires a valid device!", cmd);
+				snd_error(UCM, "%s requires a valid device!", cmd);
 				return err;
 			}
 			continue;
@@ -1130,7 +1230,7 @@ cset:
 device:
 			err = parse_string_substitute3(uc_mgr, n, &curr->data.device);
 			if (err < 0) {
-				uc_error("error: %s requires a valid device!", cmd);
+				snd_error(UCM, "%s requires a valid device!", cmd);
 				return err;
 			}
 			continue;
@@ -1165,7 +1265,7 @@ device:
 			curr->type = SEQUENCE_ELEMENT_TYPE_SYSSET;
 			err = parse_string_substitute3(uc_mgr, n, &curr->data.sysw);
 			if (err < 0) {
-				uc_error("error: sysw requires a string!");
+				snd_error(UCM, "sysw requires a string!");
 				return err;
 			}
 			continue;
@@ -1175,7 +1275,7 @@ device:
 			curr->type = SEQUENCE_ELEMENT_TYPE_SLEEP;
 			err = parse_integer_substitute3(uc_mgr, n, &curr->data.sleep);
 			if (err < 0) {
-				uc_error("error: usleep requires integer!");
+				snd_error(UCM, "usleep requires integer!");
 				return err;
 			}
 			continue;
@@ -1185,7 +1285,7 @@ device:
 			curr->type = SEQUENCE_ELEMENT_TYPE_SLEEP;
 			err = parse_integer_substitute3(uc_mgr, n, &curr->data.sleep);
 			if (err < 0) {
-				uc_error("error: msleep requires integer!");
+				snd_error(UCM, "msleep requires integer!");
 				return err;
 			}
 			curr->data.sleep *= 1000L;
@@ -1197,7 +1297,7 @@ device:
 exec:
 			err = parse_string_substitute3(uc_mgr, n, &curr->data.exec);
 			if (err < 0) {
-				uc_error("error: exec requires a string!");
+				snd_error(UCM, "exec requires a string!");
 				return err;
 			}
 			continue;
@@ -1212,7 +1312,7 @@ exec:
 			curr->type = SEQUENCE_ELEMENT_TYPE_CFGSAVE;
 			err = parse_string_substitute3(uc_mgr, n, &curr->data.cfgsave);
 			if (err < 0) {
-				uc_error("error: sysw requires a string!");
+				snd_error(UCM, "sysw requires a string!");
 				return err;
 			}
 			continue;
@@ -1221,7 +1321,7 @@ exec:
 		if (strcmp(cmd, "comment") == 0)
 			goto skip;
 
-		uc_error("error: sequence command '%s' is ignored", cmd);
+		snd_error(UCM, "sequence command '%s' is ignored", cmd);
 
 skip:
 		list_del(&curr->list);
@@ -1274,7 +1374,7 @@ static int parse_value(snd_use_case_mgr_t *uc_mgr ATTRIBUTE_UNUSED,
 	int err;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("error: compound is expected for value definition");
+		snd_error(UCM, "compound is expected for value definition");
 		return -EINVAL;
 	}
 
@@ -1297,19 +1397,19 @@ static int parse_value(snd_use_case_mgr_t *uc_mgr ATTRIBUTE_UNUSED,
 		case SND_CONFIG_TYPE_REAL:
 			err = snd_config_get_ascii(n, &s);
 			if (err < 0) {
-				uc_error("error: unable to parse value for id '%s': %s!", id, snd_strerror(err));
+				snd_error(UCM, "unable to parse value for id '%s': %s!", id, snd_strerror(err));
 				return err;
 			}
 			break;
 		case SND_CONFIG_TYPE_STRING:
 			err = parse_string_substitute(uc_mgr, n, &s);
 			if (err < 0) {
-				uc_error("error: unable to parse a string for id '%s'!", id);
+				snd_error(UCM, "unable to parse a string for id '%s'!", id);
 				return err;
 			}
 			break;
 		default:
-			uc_error("error: invalid type %i in Value compound '%s'", type, id);
+			snd_error(UCM, "invalid type %i in Value compound '%s'", type, id);
 			return -EINVAL;
 		}
 		err = uc_mgr_add_value(base, id, s);
@@ -1406,7 +1506,7 @@ static int parse_modifier(snd_use_case_mgr_t *uc_mgr,
 		if (strcmp(id, "Comment") == 0) {
 			err = parse_string_substitute3(uc_mgr, n, &modifier->comment);
 			if (err < 0) {
-				uc_error("error: failed to get modifier comment");
+				snd_error(UCM, "failed to get modifier comment");
 				return err;
 			}
 			continue;
@@ -1416,8 +1516,7 @@ static int parse_modifier(snd_use_case_mgr_t *uc_mgr,
 			err = parse_device_list(uc_mgr, &modifier->dev_list,
 						DEVLIST_SUPPORTED, n);
 			if (err < 0) {
-				uc_error("error: failed to parse supported"
-					" device list");
+				snd_error(UCM, "failed to parse supported device list");
 				return err;
 			}
 		}
@@ -1426,8 +1525,7 @@ static int parse_modifier(snd_use_case_mgr_t *uc_mgr,
 			err = parse_device_list(uc_mgr, &modifier->dev_list,
 						DEVLIST_CONFLICTING, n);
 			if (err < 0) {
-				uc_error("error: failed to parse conflicting"
-					" device list");
+				snd_error(UCM, "failed to parse conflicting device list");
 				return err;
 			}
 		}
@@ -1435,8 +1533,7 @@ static int parse_modifier(snd_use_case_mgr_t *uc_mgr,
 		if (strcmp(id, "EnableSequence") == 0) {
 			err = parse_sequence(uc_mgr, &modifier->enable_list, n);
 			if (err < 0) {
-				uc_error("error: failed to parse modifier"
-					" enable sequence");
+				snd_error(UCM, "failed to parse modifier enable sequence");
 				return err;
 			}
 			continue;
@@ -1445,8 +1542,7 @@ static int parse_modifier(snd_use_case_mgr_t *uc_mgr,
 		if (strcmp(id, "DisableSequence") == 0) {
 			err = parse_sequence(uc_mgr, &modifier->disable_list, n);
 			if (err < 0) {
-				uc_error("error: failed to parse modifier"
-					" disable sequence");
+				snd_error(UCM, "failed to parse modifier disable sequence");
 				return err;
 			}
 			continue;
@@ -1455,8 +1551,7 @@ static int parse_modifier(snd_use_case_mgr_t *uc_mgr,
 		if (strcmp(id, "TransitionSequence") == 0) {
 			err = parse_transition(uc_mgr, &modifier->transition_list, n);
 			if (err < 0) {
-				uc_error("error: failed to parse transition"
-					" modifier");
+				snd_error(UCM, "failed to parse transition modifier");
 				return err;
 			}
 			continue;
@@ -1465,13 +1560,134 @@ static int parse_modifier(snd_use_case_mgr_t *uc_mgr,
 		if (strcmp(id, "Value") == 0) {
 			err = parse_value(uc_mgr, &modifier->value_list, n);
 			if (err < 0) {
-				uc_error("error: failed to parse Value");
+				snd_error(UCM, "failed to parse Value");
 				return err;
 			}
 			continue;
 		}
 	}
 
+	return 0;
+}
+
+/*
+ * Parse device configuration fields
+ */
+static int parse_device_fields(snd_use_case_mgr_t *uc_mgr,
+			       snd_config_t *cfg,
+			       struct use_case_device *device)
+{
+	snd_config_iterator_t i, next;
+	snd_config_t *n;
+	int err;
+
+	snd_config_for_each(i, next, cfg) {
+		const char *id;
+		n = snd_config_iterator_entry(i);
+		if (snd_config_get_id(n, &id) < 0)
+			continue;
+
+		if (strcmp(id, "Comment") == 0) {
+			err = parse_string_substitute3(uc_mgr, n, &device->comment);
+			if (err < 0) {
+				snd_error(UCM, "failed to get device comment");
+				return err;
+			}
+			continue;
+		}
+
+		if (strcmp(id, "SupportedDevice") == 0) {
+			err = parse_device_list(uc_mgr, &device->dev_list,
+						DEVLIST_SUPPORTED, n);
+			if (err < 0) {
+				snd_error(UCM, "failed to parse supported device list");
+
+				return err;
+			}
+		}
+
+		if (strcmp(id, "ConflictingDevice") == 0) {
+			err = parse_device_list(uc_mgr, &device->dev_list,
+						DEVLIST_CONFLICTING, n);
+			if (err < 0) {
+				snd_error(UCM, "failed to parse conflicting device list");
+
+				return err;
+			}
+		}
+
+		if (strcmp(id, "EnableSequence") == 0) {
+			err = parse_sequence(uc_mgr, &device->enable_list, n);
+			if (err < 0) {
+				snd_error(UCM, "failed to parse device enable sequence");
+
+				return err;
+			}
+			continue;
+		}
+
+		if (strcmp(id, "DisableSequence") == 0) {
+			err = parse_sequence(uc_mgr, &device->disable_list, n);
+			if (err < 0) {
+				snd_error(UCM, "failed to parse device disable sequence");
+
+				return err;
+			}
+			continue;
+		}
+
+		if (strcmp(id, "TransitionSequence") == 0) {
+			err = parse_transition(uc_mgr, &device->transition_list, n);
+			if (err < 0) {
+				snd_error(UCM, "failed to parse transition device");
+
+				return err;
+			}
+			continue;
+		}
+
+		if (strcmp(id, "Value") == 0) {
+			err = parse_value(uc_mgr, &device->value_list, n);
+			if (err < 0) {
+				snd_error(UCM, "failed to parse Value");
+				return err;
+			}
+			continue;
+		}
+	}
+	return 0;
+}
+
+/*
+ * Helper function to copy, evaluate and optionally merge configuration trees.
+ */
+static int uc_mgr_config_copy_eval_merge(snd_use_case_mgr_t *uc_mgr,
+					 snd_config_t **dst,
+					 snd_config_t *src,
+					 snd_config_t *merge_from)
+{
+	snd_config_t *tmp = NULL;
+	int err;
+
+	err = snd_config_copy(&tmp, src);
+	if (err < 0)
+		return err;
+
+	err = uc_mgr_evaluate_inplace(uc_mgr, tmp);
+	if (err < 0) {
+		snd_config_delete(tmp);
+		return err;
+	}
+
+	if (merge_from) {
+		err = uc_mgr_config_tree_merge(uc_mgr, tmp, merge_from, NULL, NULL);
+		if (err < 0) {
+			snd_config_delete(tmp);
+			return err;
+		}
+	}
+
+	*dst = tmp;
 	return 0;
 }
 
@@ -1510,13 +1726,58 @@ static int parse_modifier(snd_use_case_mgr_t *uc_mgr,
  *	}
  * }
  */
+
+static int parse_device_by_name(snd_use_case_mgr_t *uc_mgr,
+				snd_config_t *cfg,
+				struct use_case_verb *verb,
+				const char *name,
+				struct use_case_device **ret_device)
+{
+	struct use_case_device *device;
+	int err;
+
+	device = calloc(1, sizeof(*device));
+	if (device == NULL)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&device->enable_list);
+	INIT_LIST_HEAD(&device->disable_list);
+	INIT_LIST_HEAD(&device->transition_list);
+	INIT_LIST_HEAD(&device->dev_list.list);
+	INIT_LIST_HEAD(&device->value_list);
+	INIT_LIST_HEAD(&device->variants);
+	INIT_LIST_HEAD(&device->variant_list);
+	list_add_tail(&device->list, &verb->device_list);
+	device->name = strdup(name);
+	if (device->name == NULL) {
+		free(device);
+		return -ENOMEM;
+	}
+	device->orig_name = strdup(name);
+	if (device->orig_name == NULL)
+		return -ENOMEM;
+
+	err = parse_device_fields(uc_mgr, cfg, device);
+	if (err < 0)
+		return err;
+
+	if (ret_device)
+		*ret_device = device;
+
+	return 0;
+}
+
 static int parse_device(snd_use_case_mgr_t *uc_mgr,
 			snd_config_t *cfg,
 			void *data1, void *data2)
 {
 	struct use_case_verb *verb = data1;
-	char *name;
-	struct use_case_device *device;
+	char *name, *colon;
+	const char *variant_label = NULL;
+	struct use_case_device *device = NULL;
+	snd_config_t *primary_cfg_copy = NULL;
+	snd_config_t *device_variant = NULL;
+	snd_config_t *merged_cfg = NULL;
 	snd_config_iterator_t i, next;
 	snd_config_t *n;
 	int err;
@@ -1524,102 +1785,117 @@ static int parse_device(snd_use_case_mgr_t *uc_mgr,
 	if (parse_get_safe_name(uc_mgr, cfg, data2, &name) < 0)
 		return -EINVAL;
 
-	device = calloc(1, sizeof(*device));
-	if (device == NULL) {
-		free(name);
-		return -ENOMEM;
+	if (uc_mgr->conf_format >= 8 && (colon = strchr(name, ':'))) {
+		variant_label = colon + 1;
+
+		err = snd_config_search(cfg, "DeviceVariant", &device_variant);
+		if (err == 0) {
+			snd_config_t *variant_cfg = NULL;
+
+			/* Save a copy of the primary config for creating variant devices */
+			err = snd_config_copy(&primary_cfg_copy, cfg);
+			if (err < 0) {
+				free(name);
+				return err;
+			}
+
+			err = snd_config_search(device_variant, variant_label, &variant_cfg);
+			if (err == 0) {
+				err = uc_mgr_config_copy_eval_merge(uc_mgr, &merged_cfg, cfg, variant_cfg);
+				if (err < 0) {
+					free(name);
+					return err;
+				}
+				cfg = merged_cfg;
+			}
+		}
 	}
-	INIT_LIST_HEAD(&device->enable_list);
-	INIT_LIST_HEAD(&device->disable_list);
-	INIT_LIST_HEAD(&device->transition_list);
-	INIT_LIST_HEAD(&device->dev_list.list);
-	INIT_LIST_HEAD(&device->value_list);
-	list_add_tail(&device->list, &verb->device_list);
-	device->name = name;
 
 	/* in-place evaluation */
-	err = uc_mgr_evaluate_inplace(uc_mgr, cfg);
-	if (err < 0)
-		return err;
-
-	snd_config_for_each(i, next, cfg) {
-		const char *id;
-		n = snd_config_iterator_entry(i);
-		if (snd_config_get_id(n, &id) < 0)
-			continue;
-
-		if (strcmp(id, "Comment") == 0) {
-			err = parse_string_substitute3(uc_mgr, n, &device->comment);
-			if (err < 0) {
-				uc_error("error: failed to get device comment");
-				return err;
-			}
-			continue;
-		}
-
-		if (strcmp(id, "SupportedDevice") == 0) {
-			err = parse_device_list(uc_mgr, &device->dev_list,
-						DEVLIST_SUPPORTED, n);
-			if (err < 0) {
-				uc_error("error: failed to parse supported"
-					" device list");
-				return err;
-			}
-		}
-
-		if (strcmp(id, "ConflictingDevice") == 0) {
-			err = parse_device_list(uc_mgr, &device->dev_list,
-						DEVLIST_CONFLICTING, n);
-			if (err < 0) {
-				uc_error("error: failed to parse conflicting"
-					" device list");
-				return err;
-			}
-		}
-
-		if (strcmp(id, "EnableSequence") == 0) {
-			uc_dbg("EnableSequence");
-			err = parse_sequence(uc_mgr, &device->enable_list, n);
-			if (err < 0) {
-				uc_error("error: failed to parse device enable"
-					 " sequence");
-				return err;
-			}
-			continue;
-		}
-
-		if (strcmp(id, "DisableSequence") == 0) {
-			uc_dbg("DisableSequence");
-			err = parse_sequence(uc_mgr, &device->disable_list, n);
-			if (err < 0) {
-				uc_error("error: failed to parse device disable"
-					 " sequence");
-				return err;
-			}
-			continue;
-		}
-
-		if (strcmp(id, "TransitionSequence") == 0) {
-			uc_dbg("TransitionSequence");
-			err = parse_transition(uc_mgr, &device->transition_list, n);
-			if (err < 0) {
-				uc_error("error: failed to parse transition"
-					" device");
-				return err;
-			}
-			continue;
-		}
-
-		if (strcmp(id, "Value") == 0) {
-			err = parse_value(uc_mgr, &device->value_list, n);
-			if (err < 0) {
-				uc_error("error: failed to parse Value");
-				return err;
-			}
-			continue;
+	if (cfg != merged_cfg) {
+		err = uc_mgr_evaluate_inplace(uc_mgr, cfg);
+		if (err < 0) {
+			free(name);
+			goto __error;
 		}
 	}
-	return 0;
+
+	err = parse_device_by_name(uc_mgr, cfg, verb, name, &device);
+	free(name);
+	if (err < 0)
+		goto __error;
+
+	if (merged_cfg) {
+		snd_config_delete(merged_cfg);
+		merged_cfg = NULL;
+	}
+
+	if (device_variant == NULL)
+		goto __end;
+
+	if (device->dev_list.type == DEVLIST_SUPPORTED) {
+		snd_error(UCM, "DeviceVariant cannot be used with SupportedDevice");
+		err = -EINVAL;
+		goto __error;
+	}
+
+	if (snd_config_get_type(device_variant) != SND_CONFIG_TYPE_COMPOUND) {
+		snd_error(UCM, "compound type expected for DeviceVariant");
+		err = -EINVAL;
+		goto __error;
+	}
+
+	colon = strchr(device->name, ':');
+	if (!colon) {
+		snd_error(UCM, "DeviceVariant requires ':' in device name");
+		err = -EINVAL;
+		goto __error;
+	}
+
+	snd_config_for_each(i, next, device_variant) {
+		const char *variant_name;
+		char variant_device_name[128];
+		struct use_case_device *variant = NULL;
+
+		n = snd_config_iterator_entry(i);
+
+		if (snd_config_get_id(n, &variant_name) < 0)
+			continue;
+
+		/* Create variant device name: base:variant_name */
+		snprintf(variant_device_name, sizeof(variant_device_name),
+			 "%.*s:%s", (int)(colon - device->name),
+			 device->name, variant_name);
+
+		err = uc_mgr_config_copy_eval_merge(uc_mgr, &merged_cfg, primary_cfg_copy, n);
+		if (err < 0)
+			goto __error;
+
+		err = parse_device_by_name(uc_mgr, merged_cfg, verb,
+					   variant_device_name, &variant);
+		snd_config_delete(merged_cfg);
+		merged_cfg = NULL;
+		if (err < 0)
+			goto __error;
+
+		/* Link variant to primary device */
+		list_add(&variant->variant_list, &device->variants);
+
+		err = uc_mgr_put_to_dev_list(&device->dev_list, variant->name);
+		if (err < 0)
+			goto __error;
+		if (device->dev_list.type == DEVLIST_NONE)
+			device->dev_list.type = DEVLIST_CONFLICTING;
+	}
+
+__end:
+	err = 0;
+__error:
+	if (merged_cfg)
+		snd_config_delete(merged_cfg);
+	if (primary_cfg_copy)
+		snd_config_delete(primary_cfg_copy);
+	return err;
 }
 
 /*
@@ -1647,7 +1923,7 @@ static int parse_dev_name_list(snd_use_case_mgr_t *uc_mgr,
 		return -EINVAL;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for %s", id);
+		snd_error(UCM, "compound type expected for %s", id);
 		return -EINVAL;
 	}
 
@@ -1664,7 +1940,7 @@ static int parse_dev_name_list(snd_use_case_mgr_t *uc_mgr,
 		err = parse_string_substitute3(uc_mgr, n, &name2);
 		if (err < 0) {
 			free(name1s);
-			uc_error("error: failed to get target device name for '%s'", name1);
+			snd_error(UCM, "failed to get target device name for '%s'", name1);
 			return err;
 		}
 
@@ -1770,30 +2046,33 @@ static int verb_dev_list_add(struct use_case_verb *verb,
 
 	list_for_each(pos, &verb->device_list) {
 		device = list_entry(pos, struct use_case_device, list);
+
 		if (strcmp(device->name, dst) != 0)
 			continue;
 		if (device->dev_list.type != dst_type) {
 			if (list_empty(&device->dev_list.list)) {
 				device->dev_list.type = dst_type;
 			} else {
-				uc_error("error: incompatible device list type ('%s', '%s')",
-					 device->name, src);
+				snd_error(UCM, "incompatible device list type ('%s', '%s')", device->orig_name, src);
 				return -EINVAL;
 			}
 		}
 		return uc_mgr_put_to_dev_list(&device->dev_list, src);
 	}
-	uc_error("error: unable to find device '%s'", dst);
+	snd_error(UCM, "unable to find device '%s'", dst);
 	return -ENOENT;
 }
 
 static int verb_dev_list_check(struct use_case_verb *verb)
 {
-	struct list_head *pos, *pos2;
-	struct use_case_device *device;
-	struct dev_list_node *dlist;
-	int err;
+	struct list_head *pos, *pos2, *pos3;
+	struct use_case_device *device, *target_dev;
+	struct dev_list_node *dlist, *dlist2;
+	int err, iteration;
+	int max_iterations = 100; /* safety limit to prevent infinite loops */
+	bool added_something;
 
+	/* First pass: ensure bidirectional relationships */
 	list_for_each(pos, &verb->device_list) {
 		device = list_entry(pos, struct use_case_device, list);
 		list_for_each(pos2, &device->dev_list.list) {
@@ -1804,10 +2083,403 @@ static int verb_dev_list_check(struct use_case_verb *verb)
 				return err;
 		}
 	}
+
+	/* Second pass: complete other relationships for devices in group.
+	 * For n devices, at most n-1 iterations are needed.
+	 */
+	for (iteration = 0; iteration < max_iterations; iteration++) {
+		added_something = false;
+
+		list_for_each(pos, &verb->device_list) {
+			device = list_entry(pos, struct use_case_device, list);
+
+			if (device->dev_list.type == DEVLIST_NONE)
+				continue;
+
+			list_for_each(pos2, &device->dev_list.list) {
+				dlist = list_entry(pos2, struct dev_list_node, list);
+
+				target_dev = NULL;
+				list_for_each(pos3, &verb->device_list) {
+					struct use_case_device *tmp_dev;
+					tmp_dev = list_entry(pos3, struct use_case_device, list);
+					if (strcmp(tmp_dev->name, dlist->name) == 0) {
+						target_dev = tmp_dev;
+						break;
+					}
+				}
+
+				if (!target_dev)
+					continue;
+
+				list_for_each(pos3, &device->dev_list.list) {
+					dlist2 = list_entry(pos3, struct dev_list_node, list);
+
+					if (strcmp(dlist2->name, target_dev->name) == 0)
+						continue;
+
+					/* verb_dev_list_add returns 1 if device was added, 0 if already exists */
+					err = verb_dev_list_add(verb, device->dev_list.type,
+								target_dev->name, dlist2->name);
+					if (err < 0)
+						return err;
+					if (err > 0)
+						added_something = true;
+				}
+			}
+		}
+
+		/* If nothing was added in this iteration, we're done */
+		if (!added_something)
+			break;
+	}
+
+	if (iteration >= max_iterations) {
+		snd_error(UCM, "too many device list iterations for verb '%s'", verb->name);
+		return -EINVAL;
+	}
+
 	return 0;
 }
 
-static int verb_device_management(struct use_case_verb *verb)
+/*
+ * Check if a device name is already in use
+ */
+static int is_device_name_used(struct use_case_verb *verb, const char *name, struct use_case_device *current)
+{
+	struct list_head *pos;
+	struct use_case_device *device;
+
+	list_for_each(pos, &verb->device_list) {
+		device = list_entry(pos, struct use_case_device, list);
+		if (device != current && strcmp(device->name, name) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * Update all references to a device name in modifiers and other devices.
+ * This helper function is used when renaming devices to ensure all
+ * dev_list references are updated accordingly.
+ */
+static int verb_update_device_references(struct use_case_verb *verb,
+					  const char *old_name,
+					  const char *new_name)
+{
+	struct list_head *pos, *pos2;
+	struct use_case_device *device;
+	struct use_case_modifier *modifier;
+	struct dev_list_node *dlist;
+	char *name_copy;
+
+	list_for_each(pos, &verb->modifier_list) {
+		modifier = list_entry(pos, struct use_case_modifier, list);
+		list_for_each(pos2, &modifier->dev_list.list) {
+			dlist = list_entry(pos2, struct dev_list_node, list);
+			if (strcmp(dlist->name, old_name) == 0) {
+				name_copy = strdup(new_name);
+				if (name_copy == NULL)
+					return -ENOMEM;
+				free(dlist->name);
+				dlist->name = name_copy;
+			}
+		}
+	}
+
+	list_for_each(pos, &verb->device_list) {
+		device = list_entry(pos, struct use_case_device, list);
+		list_for_each(pos2, &device->dev_list.list) {
+			dlist = list_entry(pos2, struct dev_list_node, list);
+			if (strcmp(dlist->name, old_name) == 0) {
+				name_copy = strdup(new_name);
+				if (name_copy == NULL)
+					return -ENOMEM;
+				free(dlist->name);
+				dlist->name = name_copy;
+			}
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * Normalize device names according to use-case.h specification.
+ * Device names like "HDMI 1" or "Line 1" should be normalized to "HDMI1" and "Line1".
+ * When device name contains ':', add index and remove everything after ':' (including).
+ * If final name is already used, retry with higher index.
+ * Also updates dev_list members in modifiers and devices to reference the normalized names.
+ */
+static int verb_normalize_device_names(snd_use_case_mgr_t *uc_mgr, struct use_case_verb *verb)
+{
+	struct list_head *pos;
+	struct use_case_device *device;
+	char *orig_name, *norm_name, *colon;
+	char temp[80];
+	int err, index;
+
+	list_for_each(pos, &verb->device_list) {
+		device = list_entry(pos, struct use_case_device, list);
+
+		orig_name = strdup(device->name);
+		if (orig_name == NULL)
+			return -ENOMEM;
+
+		norm_name = strdup(device->name);
+		if (norm_name == NULL) {
+			err = -ENOMEM;
+			goto __error;
+		}
+
+		if (uc_mgr->conf_format < 8)
+			goto __no_colon;
+
+		colon = strchr(norm_name, ':');
+		if (colon) {
+			if (colon[1] == '\0' || strchr(colon + 1, ' ')) {
+				snd_error(UCM, "device descriptor cannot be empty or contain spaces '%s'", orig_name);
+				err = -EINVAL;
+				goto __error;
+			}
+			*colon = '\0';
+			index = 1;
+			do {
+				snprintf(temp, sizeof(temp), "%s%d", norm_name, index);
+				if (!is_device_name_used(verb, temp, device))
+					break;
+				index++;
+			} while (index < 100); /* Safety limit */
+			if (index >= 100) {
+				snd_error(UCM, "too many device name conflicts for '%s'", orig_name);
+				err = -EINVAL;
+				goto __error;
+			}
+
+		} else {
+__no_colon:
+			err = parse_device_index(&norm_name, &index);
+			if (err < 0) {
+				snd_error(UCM, "cannot parse device name '%s'", orig_name);
+				goto __error;
+			}
+
+			if (index <= 0) {
+				free(orig_name);
+				free(norm_name);
+				continue;
+			}
+			snprintf(temp, sizeof(temp), "%s%d", norm_name, index);
+		}
+
+		free(device->name);
+		device->name = strdup(temp);
+		if (device->name == NULL) {
+			err = -ENOMEM;
+			goto __error;
+		}
+
+		/* Update all references to the old device name */
+		err = verb_update_device_references(verb, orig_name, device->name);
+		if (err < 0)
+			goto __error;
+
+		free(orig_name);
+		free(norm_name);
+	}
+
+	return 0;
+
+__error:
+	free(orig_name);
+	free(norm_name);
+	return err;
+}
+
+/*
+ * Strip index from single device names.
+ * According to use-case.h specification, if there is only one device
+ * with a given base name (e.g., only "HDMI1" and no "HDMI2"), the index
+ * should be stripped to produce the final name (e.g., "HDMI").
+ */
+static int verb_strip_single_device_index(struct use_case_verb *verb)
+{
+	struct list_head *pos, *pos2;
+	struct use_case_device *device, *device2;
+	char *base_name, *test_base;
+	char *orig_name;
+	int count, index, test_index, err;
+
+	list_for_each(pos, &verb->device_list) {
+		device = list_entry(pos, struct use_case_device, list);
+
+		base_name = strdup(device->name);
+		if (base_name == NULL)
+			return -ENOMEM;
+
+		err = parse_device_index(&base_name, &index);
+		if (err < 0) {
+			free(base_name);
+			continue;
+		}
+
+		if (index <= 0) {
+			free(base_name);
+			continue;
+		}
+
+		/* Count how many devices have the same base name */
+		count = 0;
+		list_for_each(pos2, &verb->device_list) {
+			device2 = list_entry(pos2, struct use_case_device, list);
+			test_base = strdup(device2->name);
+			if (test_base == NULL) {
+				free(base_name);
+				return -ENOMEM;
+			}
+
+			err = parse_device_index(&test_base, &test_index);
+			if (err >= 0 && strcmp(test_base, base_name) == 0)
+				count++;
+
+			free(test_base);
+		}
+
+		if (count == 1) {
+			orig_name = device->name;
+			device->name = base_name;
+
+			err = verb_update_device_references(verb, orig_name, device->name);
+			if (err < 0) {
+				device->name = orig_name;
+				free(base_name);
+				return err;
+			}
+
+			free(orig_name);
+		} else {
+			free(base_name);
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * Determine priority for a device.
+ * Priority order:
+ *   1. If 'Priority' value exists, use it as the sort key
+ *   2. If 'PlaybackPriority' value exists, use it as the sort key
+ *   3. If 'CapturePriority' value exists, use it as the sort key
+ *   4. Fallback: LONG_MIN (no priority)
+ */
+static long verb_device_get_priority(struct use_case_device *device)
+{
+	struct list_head *pos;
+	struct ucm_value *val;
+	const char *priority_str = NULL;
+	long priority = LONG_MIN;
+	int err;
+
+	list_for_each(pos, &device->value_list) {
+		val = list_entry(pos, struct ucm_value, list);
+		if (strcmp(val->name, "Priority") == 0) {
+			priority_str = val->data;
+			break;
+		}
+	}
+
+	if (!priority_str) {
+		list_for_each(pos, &device->value_list) {
+			val = list_entry(pos, struct ucm_value, list);
+			if (strcmp(val->name, "PlaybackPriority") == 0) {
+				priority_str = val->data;
+				break;
+			}
+		}
+	}
+
+	if (!priority_str) {
+		list_for_each(pos, &device->value_list) {
+			val = list_entry(pos, struct ucm_value, list);
+			if (strcmp(val->name, "CapturePriority") == 0) {
+				priority_str = val->data;
+				break;
+			}
+		}
+	}
+
+	if (priority_str) {
+		err = safe_strtol(priority_str, &priority);
+		if (err < 0)
+			priority = LONG_MIN;
+	}
+
+	return priority;
+}
+
+/*
+ * Sort devices based on priority values.
+ * Priority order:
+ *   1. If 'Priority' value exists, use it as the sort key
+ *   2. If 'PlaybackPriority' value exists, use it as the sort key
+ *   3. If 'CapturePriority' value exists, use it as the sort key
+ *   4. Fallback: use device->name (original) as the sort key
+ * Higher priority values are placed first in the list.
+ */
+static int verb_sort_devices(struct use_case_verb *verb)
+{
+	struct list_head sorted_list;
+	struct list_head *pos, *npos;
+	struct use_case_device *device, *insert_dev;
+
+	INIT_LIST_HEAD(&sorted_list);
+
+	/* First pass: determine and cache priority for all devices */
+	list_for_each(pos, &verb->device_list) {
+		device = list_entry(pos, struct use_case_device, list);
+		device->sort_priority = verb_device_get_priority(device);
+	}
+
+	/* Move devices from verb->device_list to sorted_list in sorted order */
+	list_for_each_safe(pos, npos, &verb->device_list) {
+		device = list_entry(pos, struct use_case_device, list);
+
+		/* Remove device from original list */
+		list_del(&device->list);
+
+		/* Find the insertion point in sorted_list */
+		/* Devices are sorted in descending order of priority (higher priority first) */
+		/* If priorities are equal or not defined, use device name as key */
+		if (list_empty(&sorted_list)) {
+			list_add_tail(&device->list, &sorted_list);
+		} else {
+			struct list_head *pos2, *insert_pos = &sorted_list;
+			list_for_each(pos2, &sorted_list) {
+				insert_dev = list_entry(pos2, struct use_case_device, list);
+
+				if (device->sort_priority > insert_dev->sort_priority) {
+					insert_pos = pos2;
+					break;
+				} else if (device->sort_priority == insert_dev->sort_priority) {
+					if (strcmp(device->name, insert_dev->name) < 0) {
+						insert_pos = pos2;
+						break;
+					}
+				}
+			}
+
+			list_add_tail(&device->list, insert_pos);
+		}
+	}
+
+	/* Move sorted list back to verb->device_list */
+	list_splice_init(&sorted_list, &verb->device_list);
+
+	return 0;
+}
+
+static int verb_device_management(snd_use_case_mgr_t *uc_mgr, struct use_case_verb *verb)
 {
 	struct list_head *pos;
 	struct ucm_dev_name *dev;
@@ -1818,7 +2490,7 @@ static int verb_device_management(struct use_case_verb *verb)
 		dev = list_entry(pos, struct ucm_dev_name, list);
 		err = uc_mgr_rename_device(verb, dev->name1, dev->name2);
 		if (err < 0) {
-			uc_error("error: cannot rename device '%s' to '%s'", dev->name1, dev->name2);
+			snd_error(UCM, "cannot rename device '%s' to '%s'", dev->name1, dev->name2);
 			return err;
 		}
 	}
@@ -1828,7 +2500,7 @@ static int verb_device_management(struct use_case_verb *verb)
 		dev = list_entry(pos, struct ucm_dev_name, list);
 		err = uc_mgr_remove_device(verb, dev->name2);
 		if (err < 0) {
-			uc_error("error: cannot remove device '%s'", dev->name2);
+			snd_error(UCM, "cannot remove device '%s'", dev->name2);
 			return err;
 		}
 	}
@@ -1836,6 +2508,27 @@ static int verb_device_management(struct use_case_verb *verb)
 	/* those lists are no longer used */
 	uc_mgr_free_dev_name_list(&verb->rename_list);
 	uc_mgr_free_dev_name_list(&verb->remove_list);
+
+	/* strip index from single device names */
+	if (uc_mgr->conf_format >= 8) {
+		/* sort devices by priority */
+		err = verb_sort_devices(verb);
+		if (err < 0)
+			return err;
+	}
+
+	/* normalize device names to remove spaces per use-case.h specification */
+	err = verb_normalize_device_names(uc_mgr, verb);
+	if (err < 0)
+		return err;
+
+	/* strip index from single device names */
+	if (uc_mgr->conf_format >= 8) {
+		err = verb_strip_single_device_index(verb);
+		if (err < 0)
+			return err;
+
+	}
 
 	/* handle conflicting/supported lists */
 	return verb_dev_list_check(verb);
@@ -1885,7 +2578,7 @@ static int parse_verb(snd_use_case_mgr_t *uc_mgr,
 	snd_config_iterator_t i, next;
 	snd_config_t *n;
 	int err;
-	
+
 	/* in-place evaluation */
 	err = uc_mgr_evaluate_inplace(uc_mgr, cfg);
 	if (err < 0)
@@ -1899,37 +2592,34 @@ static int parse_verb(snd_use_case_mgr_t *uc_mgr,
 			continue;
 
 		if (strcmp(id, "EnableSequence") == 0) {
-			uc_dbg("Parse EnableSequence");
 			err = parse_sequence(uc_mgr, &verb->enable_list, n);
 			if (err < 0) {
-				uc_error("error: failed to parse verb enable sequence");
+				snd_error(UCM, "failed to parse verb enable sequence");
 				return err;
 			}
 			continue;
 		}
 
 		if (strcmp(id, "DisableSequence") == 0) {
-			uc_dbg("Parse DisableSequence");
 			err = parse_sequence(uc_mgr, &verb->disable_list, n);
 			if (err < 0) {
-				uc_error("error: failed to parse verb disable sequence");
+				snd_error(UCM, "failed to parse verb disable sequence");
 				return err;
 			}
 			continue;
 		}
 
 		if (strcmp(id, "TransitionSequence") == 0) {
-			uc_dbg("Parse TransitionSequence");
+			snd_debug(UCM, "Parse TransitionSequence");
 			err = parse_transition(uc_mgr, &verb->transition_list, n);
 			if (err < 0) {
-				uc_error("error: failed to parse transition sequence");
+				snd_error(UCM, "failed to parse transition sequence");
 				return err;
 			}
 			continue;
 		}
 
 		if (strcmp(id, "Value") == 0) {
-			uc_dbg("Parse Value");
 			err = parse_value(uc_mgr, &verb->value_list, n);
 			if (err < 0)
 				return err;
@@ -1941,9 +2631,9 @@ static int parse_verb(snd_use_case_mgr_t *uc_mgr,
 }
 
 /*
- * Parse a Use case verb file.
+ * Parse a Use case verb configuration.
  *
- * This file contains the following :-
+ * This configuration contains the following :-
  *  o Verb enable and disable sequences.
  *  o Supported Device enable and disable sequences for verb.
  *  o Supported Modifier enable and disable sequences for verb
@@ -1951,15 +2641,15 @@ static int parse_verb(snd_use_case_mgr_t *uc_mgr,
  *  o Optional PCM device ID for verb and modifiers
  *  o Alias kcontrols IDs for master and volumes and mutes.
  */
-static int parse_verb_file(snd_use_case_mgr_t *uc_mgr,
-			   const char *use_case_name,
-			   const char *comment,
-			   const char *file)
+static int parse_verb_config(snd_use_case_mgr_t *uc_mgr,
+			     const char *use_case_name,
+			     const char *comment,
+			     snd_config_t *cfg,
+			     const char *what)
 {
 	snd_config_iterator_t i, next;
 	snd_config_t *n;
 	struct use_case_verb *verb;
-	snd_config_t *cfg;
 	int err;
 
 	/* allocate verb */
@@ -1988,15 +2678,10 @@ static int parse_verb_file(snd_use_case_mgr_t *uc_mgr,
 			return -ENOMEM;
 	}
 
-	/* open Verb file for reading */
-	err = uc_mgr_config_load_file(uc_mgr, file, &cfg);
-	if (err < 0)
-		return err;
-
 	/* in-place evaluation */
 	err = uc_mgr_evaluate_inplace(uc_mgr, cfg);
 	if (err < 0)
-		goto _err;
+		return err;
 
 	/* parse master config sections */
 	snd_config_for_each(i, next, cfg) {
@@ -2009,9 +2694,8 @@ static int parse_verb_file(snd_use_case_mgr_t *uc_mgr,
 		if (strcmp(id, "SectionVerb") == 0) {
 			err = parse_verb(uc_mgr, verb, n);
 			if (err < 0) {
-				uc_error("error: %s failed to parse verb",
-						file);
-				goto _err;
+				snd_error(UCM, "%s failed to parse verb", what);
+				return err;
 			}
 			continue;
 		}
@@ -2021,9 +2705,8 @@ static int parse_verb_file(snd_use_case_mgr_t *uc_mgr,
 			err = parse_compound(uc_mgr, n,
 						parse_device_name, verb, NULL);
 			if (err < 0) {
-				uc_error("error: %s failed to parse device",
-						file);
-				goto _err;
+				snd_error(UCM, "%s failed to parse device", what);
+				return err;
 			}
 			continue;
 		}
@@ -2033,9 +2716,8 @@ static int parse_verb_file(snd_use_case_mgr_t *uc_mgr,
 			err = parse_compound(uc_mgr, n,
 					     parse_modifier_name, verb, NULL);
 			if (err < 0) {
-				uc_error("error: %s failed to parse modifier",
-						file);
-				goto _err;
+				snd_error(UCM, "%s failed to parse modifier", what);
+				return err;
 			}
 			continue;
 		}
@@ -2044,9 +2726,8 @@ static int parse_verb_file(snd_use_case_mgr_t *uc_mgr,
 		if (strcmp(id, "RenameDevice") == 0) {
 			err = parse_dev_name_list(uc_mgr, n, &verb->rename_list);
 			if (err < 0) {
-				uc_error("error: %s failed to parse device rename",
-						file);
-				goto _err;
+				snd_error(UCM, "%s failed to parse device rename", what);
+				return err;
 			}
 			continue;
 		}
@@ -2055,9 +2736,8 @@ static int parse_verb_file(snd_use_case_mgr_t *uc_mgr,
 		if (strcmp(id, "RemoveDevice") == 0) {
 			err = parse_dev_name_list(uc_mgr, n, &verb->remove_list);
 			if (err < 0) {
-				uc_error("error: %s failed to parse device remove",
-						file);
-				goto _err;
+				snd_error(UCM, "%s failed to parse device remove", what);
+				return err;
 			}
 			continue;
 		}
@@ -2066,33 +2746,27 @@ static int parse_verb_file(snd_use_case_mgr_t *uc_mgr,
 		if (uc_mgr->conf_format > 3 && strcmp(id, "LibraryConfig") == 0) {
 			err = parse_libconfig(uc_mgr, n);
 			if (err < 0) {
-				uc_error("error: failed to parse LibConfig");
-				goto _err;
+				snd_error(UCM, "%s failed to parse LibConfig", what);
+				return err;
 			}
 			continue;
 		}
 	}
 
-	snd_config_delete(cfg);
-
 	/* use case verb must have at least 1 device */
 	if (list_empty(&verb->device_list)) {
-		uc_error("error: no use case device defined", file);
+		snd_error(UCM, "no use case device defined");
 		return -EINVAL;
 	}
 
 	/* do device rename and delete */
-	err = verb_device_management(verb);
+	err = verb_device_management(uc_mgr, verb);
 	if (err < 0) {
-		uc_error("error: device management error in verb '%s'", verb->name);
+		snd_error(UCM, "device management error in verb '%s'", verb->name);
 		return err;
 	}
 
 	return 0;
-
-       _err:
-	snd_config_delete(cfg);
-	return err;
 }
 
 /*
@@ -2118,7 +2792,7 @@ static int parse_variant(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg,
 			if (_vfile) {
 				err = parse_string_substitute3(uc_mgr, n, &file);
 				if (err < 0) {
-					uc_error("failed to get File");
+					snd_error(UCM, "failed to get File");
 					goto __error;
 				}
 			}
@@ -2130,14 +2804,14 @@ static int parse_variant(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg,
 			if (_vcomment) {
 				err = parse_string_substitute3(uc_mgr, n, &comment);
 				if (err < 0) {
-					uc_error("error: failed to get Comment");
+					snd_error(UCM, "failed to get Comment");
 					goto __error;
 				}
 			}
 			continue;
 		}
 
-		uc_error("unknown field '%s' in Variant section", id);
+		snd_error(UCM, "unknown field '%s' in Variant section", id);
 		err = -EINVAL;
 		goto __error;
 	}
@@ -2162,19 +2836,19 @@ static int parse_master_section(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg,
 				void *data2 ATTRIBUTE_UNUSED)
 {
 	snd_config_iterator_t i, next;
-	snd_config_t *n, *variant = NULL;
+	snd_config_t *n, *variant = NULL, *config = NULL;
 	char *use_case_name, *file = NULL, *comment = NULL;
 	bool variant_ok = false;
 	int err;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for use case section");
+		snd_error(UCM, "compound type expected for use case section");
 		return -EINVAL;
 	}
 
 	err = parse_get_safe_name(uc_mgr, cfg, NULL, &use_case_name);
 	if (err < 0) {
-		uc_error("unable to get name for use case section");
+		snd_error(UCM, "unable to get name for use case section");
 		return err;
 	}
 
@@ -2196,9 +2870,25 @@ static int parse_master_section(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg,
 		if (strcmp(id, "File") == 0) {
 			err = parse_string_substitute3(uc_mgr, n, &file);
 			if (err < 0) {
-				uc_error("failed to get File");
+				snd_error(UCM, "failed to get File");
 				goto __error;
 			}
+			continue;
+		}
+
+		/* get use case verb configuration block (syntax version 8+) */
+		if (strcmp(id, "Config") == 0) {
+			if (uc_mgr->conf_format < 8) {
+				snd_error(UCM, "Config is supported in v8+ syntax");
+				err = -EINVAL;
+				goto __error;
+			}
+			if (snd_config_get_type(n) != SND_CONFIG_TYPE_COMPOUND) {
+				snd_error(UCM, "compound type expected for Config");
+				err = -EINVAL;
+				goto __error;
+			}
+			config = n;
 			continue;
 		}
 
@@ -2206,7 +2896,7 @@ static int parse_master_section(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg,
 		if (strncmp(id, "Comment", 7) == 0) {
 			err = parse_string_substitute3(uc_mgr, n, &comment);
 			if (err < 0) {
-				uc_error("error: failed to get Comment");
+				snd_error(UCM, "failed to get Comment");
 				goto __error;
 			}
 			continue;
@@ -2230,50 +2920,129 @@ static int parse_master_section(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg,
 			continue;
 		}
 
-		uc_error("unknown field '%s' in SectionUseCase", id);
+		snd_error(UCM, "unknown field '%s' in SectionUseCase", id);
 	}
 
 	if (variant && !variant_ok) {
-		uc_error("error: undefined variant '%s'", use_case_name);
+		snd_error(UCM, "undefined variant '%s'", use_case_name);
+		err = -EINVAL;
+		goto __error;
+	}
+
+	/* check mutual exclusivity of File and Config */
+	if (file && config) {
+		snd_error(UCM, "both File and Config specified in SectionUseCase");
 		err = -EINVAL;
 		goto __error;
 	}
 
 	if (!variant) {
-		uc_dbg("use_case_name %s file '%s'", use_case_name, file);
+		snd_debug(UCM, "use_case_name %s file '%s'", use_case_name, file);
 
-		/* do we have both use case name and file ? */
-		if (!file) {
-			uc_error("error: use case missing file");
+		/* do we have both use case name and (file or config) ? */
+		if (!file && !config) {
+			snd_error(UCM, "use case missing file or config");
 			err = -EINVAL;
 			goto __error;
 		}
 
-		/* parse verb file */
-		err = parse_verb_file(uc_mgr, use_case_name, comment, file);
+		/* parse verb from file or config */
+		if (file) {
+			snd_config_t *cfg;
+			/* load config from file */
+			err = uc_mgr_config_load_file(uc_mgr, file, &cfg, false);
+			if (err < 0)
+				goto __error;
+			/* parse the config */
+			err = parse_verb_config(uc_mgr, use_case_name, comment, cfg, file);
+			snd_config_delete(cfg);
+		} else {
+			/* inline config - parse directly */
+			err = parse_verb_config(uc_mgr, use_case_name, comment, config,
+						comment ? comment : use_case_name);
+		}
 	} else {
 		/* parse variants */
+		struct list_head orig_variable_list;
+		snd_config_t *orig_macros = NULL;
+		int first_iteration = 1;
+
+		/* save original variable list */
+		err = uc_mgr_duplicate_variables(&orig_variable_list, &uc_mgr->variable_list);
+		if (err < 0)
+			goto __error;
+
+		/* save original macros */
+		if (uc_mgr->macros) {
+			err = snd_config_copy(&orig_macros, uc_mgr->macros);
+			if (err < 0)
+				goto __variant_error;
+		}
+
 		snd_config_for_each(i, next, variant) {
 			char *vfile, *vcomment;
 			const char *id;
+
+			/* restore variables and macros for second and later iterations */
+			if (!first_iteration) {
+				uc_mgr_free_value(&uc_mgr->variable_list);
+
+				err = uc_mgr_duplicate_variables(&uc_mgr->variable_list, &orig_variable_list);
+				if (err < 0)
+					goto __variant_error;
+
+				if (uc_mgr->macros) {
+					snd_config_delete(uc_mgr->macros);
+					uc_mgr->macros = NULL;
+				}
+				if (orig_macros) {
+					err = snd_config_copy(&uc_mgr->macros, orig_macros);
+					if (err < 0)
+						goto __variant_error;
+				}
+			}
+			first_iteration = 0;
+
 			n = snd_config_iterator_entry(i);
 			if (snd_config_get_id(n, &id) < 0)
 				continue;
 			if (!parse_is_name_safe(id)) {
 				err = -EINVAL;
-				goto __error;
+				goto __variant_error;
 			}
 			err = parse_variant(uc_mgr, n, &vfile, &vcomment);
 			if (err < 0)
 				break;
 			uc_mgr->parse_variant = id;
-			err = parse_verb_file(uc_mgr, id,
-						vcomment ? vcomment : comment,
-						vfile ? vfile : file);
+			if (vfile || file) {
+				snd_config_t *cfg;
+				const char *fname = vfile ? vfile : file;
+				/* load config from file */
+				err = uc_mgr_config_load_file(uc_mgr, fname, &cfg, false);
+				if (err >= 0) {
+					err = parse_verb_config(uc_mgr, id,
+								vcomment ? vcomment : comment,
+								cfg, fname);
+					snd_config_delete(cfg);
+				}
+			} else {
+				/* inline config from variant */
+				err = parse_verb_config(uc_mgr, id,
+							vcomment ? vcomment : comment,
+							config,
+							vcomment ? vcomment : (comment ? comment : id));
+			}
 			uc_mgr->parse_variant = NULL;
 			free(vfile);
 			free(vcomment);
+			if (err < 0)
+				break;
 		}
+
+__variant_error:
+		uc_mgr_free_value(&orig_variable_list);
+		if (orig_macros)
+			snd_config_delete(orig_macros);
 	}
 
 __error:
@@ -2291,12 +3060,12 @@ static int parse_controls_fixedboot(snd_use_case_mgr_t *uc_mgr, snd_config_t *cf
 	int err;
 
 	if (!list_empty(&uc_mgr->fixedboot_list)) {
-		uc_error("FixedBoot list is not empty");
+		snd_error(UCM, "FixedBoot list is not empty");
 		return -EINVAL;
 	}
 	err = parse_sequence(uc_mgr, &uc_mgr->fixedboot_list, cfg);
 	if (err < 0) {
-		uc_error("Unable to parse FixedBootSequence");
+		snd_error(UCM, "Unable to parse FixedBootSequence");
 		return err;
 	}
 
@@ -2311,12 +3080,12 @@ static int parse_controls_boot(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 	int err;
 
 	if (!list_empty(&uc_mgr->boot_list)) {
-		uc_error("Boot list is not empty");
+		snd_error(UCM, "Boot list is not empty");
 		return -EINVAL;
 	}
 	err = parse_sequence(uc_mgr, &uc_mgr->boot_list, cfg);
 	if (err < 0) {
-		uc_error("Unable to parse BootSequence");
+		snd_error(UCM, "Unable to parse BootSequence");
 		return err;
 	}
 
@@ -2331,12 +3100,12 @@ static int parse_controls(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 	int err;
 
 	if (!list_empty(&uc_mgr->default_list)) {
-		uc_error("Default list is not empty");
+		snd_error(UCM, "Default list is not empty");
 		return -EINVAL;
 	}
 	err = parse_sequence(uc_mgr, &uc_mgr->default_list, cfg);
 	if (err < 0) {
-		uc_error("Unable to parse SectionDefaults");
+		snd_error(UCM, "Unable to parse SectionDefaults");
 		return err;
 	}
 
@@ -2399,7 +3168,7 @@ static int parse_master_file(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 	int err;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for master file");
+		snd_error(UCM, "compound type expected for master file");
 		return -EINVAL;
 	}
 
@@ -2414,6 +3183,24 @@ static int parse_master_file(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 	if (err < 0)
 		return err;
 
+	/* parse ValueGlobals first */
+	err = snd_config_search(cfg, "ValueGlobals", &n);
+	if (err == 0) {
+		err = parse_value(uc_mgr, &uc_mgr->global_value_list, n);
+		if (err < 0) {
+			snd_error(UCM, "failed to parse ValueGlobals");
+			return err;
+		}
+	}
+
+	err = uc_mgr_check_value(&uc_mgr->global_value_list, "BootCardGroup");
+	if (err == 0) {
+		uc_mgr->card_group = true;
+		/* if we are in boot, skip the main parsing loop */
+		if (uc_mgr->in_boot)
+			return 0;
+	}
+
 	/* parse master config sections */
 	snd_config_for_each(i, next, cfg) {
 
@@ -2424,7 +3211,7 @@ static int parse_master_file(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 		if (strcmp(id, "Comment") == 0) {
 			err = parse_string_substitute3(uc_mgr, n, &uc_mgr->comment);
 			if (err < 0) {
-				uc_error("error: failed to get master comment");
+				snd_error(UCM, "failed to get master comment");
 				return err;
 			}
 			continue;
@@ -2464,21 +3251,25 @@ static int parse_master_file(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 			continue;
 		}
 
-		/* get the default values */
+		/* ValueDefaults is now parsed at the top of this function */
 		if (strcmp(id, "ValueDefaults") == 0) {
 			err = parse_value(uc_mgr, &uc_mgr->value_list, n);
 			if (err < 0) {
-				uc_error("error: failed to parse ValueDefaults");
+				snd_error(UCM, "failed to parse ValueDefaults");
 				return err;
 			}
 			continue;
 		}
 
+		/* ValueGlobals is parsed at the top of this function */
+		if (strcmp(id, "ValueGlobals") == 0)
+			continue;
+
 		/* alsa-lib configuration */
 		if (uc_mgr->conf_format > 3 && strcmp(id, "LibraryConfig") == 0) {
 			err = parse_libconfig(uc_mgr, n);
 			if (err < 0) {
-				uc_error("error: failed to parse LibraryConfig");
+				snd_error(UCM, "failed to parse LibraryConfig");
 				return err;
 			}
 			continue;
@@ -2492,7 +3283,7 @@ static int parse_master_file(snd_use_case_mgr_t *uc_mgr, snd_config_t *cfg)
 		if (strcmp(id, "Syntax") == 0)
 			continue;
 
-		uc_error("unknown master file field %s", id);
+		snd_error(UCM, "unknown master file field %s", id);
 	}
 	return 0;
 }
@@ -2525,7 +3316,7 @@ static int get_by_card_name(snd_use_case_mgr_t *mgr, const char *card_name)
 
 	card = -1;
 	if (snd_card_next(&card) < 0 || card < 0) {
-		uc_error("no soundcards found...");
+		snd_error(UCM, "no soundcards found...");
 		return -1;
 	}
 
@@ -2549,7 +3340,7 @@ static int get_by_card_name(snd_use_case_mgr_t *mgr, const char *card_name)
 		}
 
 		if (snd_card_next(&card) < 0) {
-			uc_error("snd_card_next");
+			snd_error(UCM, "snd_card_next");
 			break;
 		}
 	}
@@ -2578,7 +3369,7 @@ static int parse_toplevel_path(snd_use_case_mgr_t *uc_mgr,
 	int err;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for UseCasePath node");
+		snd_error(UCM, "compound type expected for UseCasePath node");
 		return -EINVAL;
 	}
 
@@ -2587,7 +3378,7 @@ static int parse_toplevel_path(snd_use_case_mgr_t *uc_mgr,
 		n = snd_config_iterator_entry(i);
 
 		if (snd_config_get_type(n) != SND_CONFIG_TYPE_COMPOUND) {
-			uc_error("compound type expected for UseCasePath.something node");
+			snd_error(UCM, "compound type expected for UseCasePath.something node");
 			return -EINVAL;
 		}
 
@@ -2606,11 +3397,11 @@ static int parse_toplevel_path(snd_use_case_mgr_t *uc_mgr,
 			if (strcmp(id, "Version") == 0) {
 				err = parse_integer_substitute(uc_mgr, n2, &version);
 				if (err < 0) {
-					uc_error("unable to parse UcmDirectory");
+					snd_error(UCM, "unable to parse UcmDirectory");
 					goto __error;
 				}
 				if (version < 1 || version > 2) {
-					uc_error("Version must be 1 or 2");
+					snd_error(UCM, "Version must be 1 or 2");
 					err = -EINVAL;
 					goto __error;
 				}
@@ -2620,7 +3411,7 @@ static int parse_toplevel_path(snd_use_case_mgr_t *uc_mgr,
 			if (strcmp(id, "Directory") == 0) {
 				err = parse_string_substitute(uc_mgr, n2, &dir);
 				if (err < 0) {
-					uc_error("unable to parse Directory");
+					snd_error(UCM, "unable to parse Directory");
 					goto __error;
 				}
 				continue;
@@ -2629,25 +3420,26 @@ static int parse_toplevel_path(snd_use_case_mgr_t *uc_mgr,
 			if (strcmp(id, "File") == 0) {
 				err = parse_string_substitute(uc_mgr, n2, &file);
 				if (err < 0) {
-					uc_error("unable to parse File");
+					snd_error(UCM, "unable to parse File");
 					goto __error;
 				}
 				continue;
 			}
 
-			uc_error("unknown UseCasePath field %s", id);
+			snd_error(UCM, "unknown UseCasePath field %s", id);
 		}
 
 		if (dir == NULL) {
-			uc_error("Directory is not defined in %s!", filename);
+			snd_error(UCM, "Directory is not defined in %s!", filename);
 			goto __next;
 		}
 		if (file == NULL) {
-			uc_error("File is not defined in %s!", filename);
+			snd_error(UCM, "File is not defined in %s!", filename);
 			goto __next;
 		}
 
 		ucm_filename(fn, sizeof(fn), version, dir, file);
+		snd_trace(UCM, "probing configuration file '%s'", fn);
 		if (access(fn, R_OK) == 0 && lstat64(fn, &st) == 0) {
 			if (S_ISLNK(st.st_mode)) {
 				ssize_t r;
@@ -2679,6 +3471,7 @@ static int parse_toplevel_path(snd_use_case_mgr_t *uc_mgr,
 				}
 				free(link);
 			}
+			snd_trace(UCM, "using directory '%s' and file '%s'", dir, file);
 			if (replace_string(&uc_mgr->conf_dir_name, dir) == NULL)
 				goto __enomem;
 			if (replace_string(&uc_mgr->conf_file_name, file) == NULL)
@@ -2723,7 +3516,7 @@ static int parse_toplevel_config(snd_use_case_mgr_t *uc_mgr,
 	int err;
 
 	if (snd_config_get_type(cfg) != SND_CONFIG_TYPE_COMPOUND) {
-		uc_error("compound type expected for toplevel file");
+		snd_error(UCM, "compound type expected for toplevel file");
 		return -EINVAL;
 	}
 
@@ -2754,7 +3547,7 @@ static int parse_toplevel_config(snd_use_case_mgr_t *uc_mgr,
 		if (uc_mgr->conf_format > 3 && strcmp(id, "LibraryConfig") == 0) {
 			err = parse_libconfig(uc_mgr, n);
 			if (err < 0) {
-				uc_error("error: failed to parse LibConfig");
+				snd_error(UCM, "failed to parse LibConfig");
 				return err;
 			}
 			continue;
@@ -2764,7 +3557,7 @@ static int parse_toplevel_config(snd_use_case_mgr_t *uc_mgr,
 		if (strcmp(id, "Syntax") == 0)
 			continue;
 
-		uc_error("unknown toplevel field %s", id);
+		snd_error(UCM, "unknown toplevel field %s", id);
 	}
 
 	return -ENOENT;
@@ -2780,11 +3573,11 @@ static int load_toplevel_config(snd_use_case_mgr_t *uc_mgr,
 	ucm_filename(filename, sizeof(filename), 2, NULL, "ucm.conf");
 
 	if (access(filename, R_OK) != 0) {
-		uc_error("Unable to find the top-level configuration file '%s'.", filename);
+		snd_error(UCM, "Unable to find the top-level configuration file '%s'.", filename);
 		return -ENOENT;
 	}
 
-	err = uc_mgr_config_load(2, filename, &tcfg);
+	err = uc_mgr_config_load(2, filename, &tcfg, false);
 	if (err < 0)
 		goto __error;
 
@@ -2794,10 +3587,9 @@ static int load_toplevel_config(snd_use_case_mgr_t *uc_mgr,
 	if (err < 0)
 		goto __error;
 
-	err = uc_mgr_config_load(uc_mgr->conf_format, filename, cfg);
+	err = uc_mgr_config_load(uc_mgr->conf_format, filename, cfg, false);
 	if (err < 0) {
-		uc_error("error: could not parse configuration for card %s",
-				uc_mgr->card_name);
+		snd_error(UCM, "could not parse configuration for card %s", uc_mgr->card_name);
 		goto __error;
 	}
 
@@ -2827,7 +3619,7 @@ int uc_mgr_import_master_config(snd_use_case_mgr_t *uc_mgr)
 	if (strncmp(name, "hw:", 3) == 0) {
 		err = get_by_card(uc_mgr, name);
 		if (err < 0) {
-			uc_error("card '%s' is not valid", name);
+			snd_error(UCM, "card '%s' is not valid", name);
 			goto __error;
 		}
 	} else if (strncmp(name, "strict:", 7)) {
@@ -2915,7 +3707,14 @@ int uc_mgr_scan_master_configs(const char **_list[])
 		snprintf(filename, sizeof(filename), "%s/ucm2/conf.virt.d",
 			 snd_config_topdir());
 
-#if defined(_GNU_SOURCE) && !defined(__NetBSD__) && !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__DragonFly__) && !defined(__sun) && !defined(ANDROID)
+#if defined(_GNU_SOURCE) && \
+    !defined(__NetBSD__) && \
+    !defined(__FreeBSD__) && \
+    !defined(__OpenBSD__) && \
+    !defined(__DragonFly__) && \
+    !defined(__sun) && \
+    !defined(__ANDROID__) && \
+    !defined(__OHOS__)
 #define SORTFUNC	versionsort64
 #else
 #define SORTFUNC	alphasort64
@@ -2923,8 +3722,7 @@ int uc_mgr_scan_master_configs(const char **_list[])
 	err = scandir64(filename, &namelist, filename_filter, SORTFUNC);
 	if (err < 0) {
 		err = -errno;
-		uc_error("error: could not scan directory %s: %s",
-				filename, strerror(-err));
+		snd_error(UCM, "could not scan directory %s: %s", filename, strerror(-err));
 		return err;
 	}
 	cnt = err;
@@ -2962,7 +3760,7 @@ int uc_mgr_scan_master_configs(const char **_list[])
 		if (err == -ENOENT || err == -ENXIO)
 			continue;
 		if (err < 0) {
-			uc_error("Unable to open '%s': %s", fn, snd_strerror(err));
+			snd_error(UCM, "Unable to open '%s': %s", fn, snd_strerror(err));
 			goto __err;
 		}
 		err = snd_use_case_get(uc_mgr, "comment", (const char **)&s);
@@ -2995,23 +3793,23 @@ int uc_mgr_scan_master_configs(const char **_list[])
 #endif
 			continue;
 
-		err = uc_mgr_config_load(2, filename, &cfg);
+		err = uc_mgr_config_load(2, filename, &cfg, false);
 		if (err < 0)
 			goto __err;
 		err = snd_config_search(cfg, "Syntax", &c);
 		if (err < 0) {
-			uc_error("Syntax field not found in %s", d_name);
+			snd_error(UCM, "Syntax field not found in %s", d_name);
 			snd_config_delete(cfg);
 			continue;
 		}
 		err = snd_config_get_integer(c, &l);
 		if (err < 0) {
-			uc_error("Syntax field is invalid in %s", d_name);
+			snd_error(UCM, "Syntax field is invalid in %s", d_name);
 			snd_config_delete(cfg);
 			goto __err;
 		}
 		if (l < 2 || l > SYNTAX_VERSION_MAX) {
-			uc_error("Incompatible syntax %d in %s", l, d_name);
+			snd_error(UCM, "Incompatible syntax %d in %s", l, d_name);
 			snd_config_delete(cfg);
 			goto __err;
 		}

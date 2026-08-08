@@ -29,6 +29,8 @@
  *
  */
 
+#include "local.h"
+#include "mixer_simple.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -38,9 +40,6 @@
 #include <assert.h>
 #include <math.h>
 #include <limits.h>
-#include "local.h"
-#include "config.h"
-#include "mixer_simple.h"
 
 #ifndef DOC_HIDDEN
 
@@ -650,10 +649,10 @@ static int selem_write_main(snd_mixer_elem_t *elem)
 static int selem_write(snd_mixer_elem_t *elem)
 {
 	int err;
-	
+
 	err = selem_write_main(elem);
 	if (err < 0)
-		selem_read(elem);
+		(void)selem_read(elem);
 	return err;
 }
 
@@ -884,7 +883,7 @@ static int simple_update(snd_mixer_elem_t *melem)
 		simple->str[SM_CAPT].max = cmax != LONG_MIN ? cmax : 0;
 	}
 	return 0;
-}	   
+}
 
 #ifndef DOC_HIDDEN
 static const struct suf {
@@ -962,7 +961,7 @@ static int base_len(const char *name, selem_ctl_type_t *type)
 /*
  * Simple Mixer Operations
  */
-	
+
 static int _snd_mixer_selem_set_volume(snd_mixer_elem_t *elem, int dir, snd_mixer_selem_channel_id_t channel, long value)
 {
 	selem_none_t *s = snd_mixer_elem_get_private(elem);
@@ -972,7 +971,7 @@ static int _snd_mixer_selem_set_volume(snd_mixer_elem_t *elem, int dir, snd_mixe
 		return 0;
 	if (value < s->str[dir].min || value > s->str[dir].max)
 		return 0;
-	if (s->selem.caps & 
+	if (s->selem.caps &
 	    (dir == SM_PLAY ? SM_CAP_PVOLUME_JOIN : SM_CAP_CVOLUME_JOIN))
 		channel = 0;
 	if (value != s->str[dir].vol[channel]) {
@@ -985,9 +984,11 @@ static int _snd_mixer_selem_set_volume(snd_mixer_elem_t *elem, int dir, snd_mixe
 static int _snd_mixer_selem_set_switch(snd_mixer_elem_t *elem, int dir, snd_mixer_selem_channel_id_t channel, int value)
 {
 	selem_none_t *s = snd_mixer_elem_get_private(elem);
+	if (channel < 0 || channel > 31)
+		return 0;
 	if ((unsigned int) channel >= s->str[dir].channels)
 		return 0;
-	if (s->selem.caps & 
+	if (s->selem.caps &
 	    (dir == SM_PLAY ? SM_CAP_PSWITCH_JOIN : SM_CAP_CSWITCH_JOIN))
 		channel = 0;
 	if (value) {
@@ -1007,7 +1008,7 @@ static int _snd_mixer_selem_set_switch(snd_mixer_elem_t *elem, int dir, snd_mixe
 static int is_ops(snd_mixer_elem_t *elem, int dir, int cmd, int val)
 {
 	selem_none_t *s = snd_mixer_elem_get_private(elem);
-	
+
 	switch (cmd) {
 
 	case SM_OPS_IS_ACTIVE: {
@@ -1035,7 +1036,7 @@ static int is_ops(snd_mixer_elem_t *elem, int dir, int cmd, int val)
 		if (s->selem.caps & (SM_CAP_CENUM | SM_CAP_PENUM) )
 			return 1;
 		return 0;
-	
+
 	case SM_OPS_IS_ENUMCNT:
 		/* Both */
 		if ( (s->selem.caps & (SM_CAP_CENUM | SM_CAP_PENUM)) == (SM_CAP_CENUM | SM_CAP_PENUM) ) {
@@ -1055,7 +1056,7 @@ static int is_ops(snd_mixer_elem_t *elem, int dir, int cmd, int val)
 		}
 
 	}
-	
+
 	return 1;
 }
 
@@ -1156,11 +1157,12 @@ static selem_ctl_t *get_selem_ctl(selem_none_t *s, int dir)
 		c = &s->ctls[CTL_CAPTURE_VOLUME];
 	else
 		return NULL;
-	if (! c->elem) {
+	if (! c->elem)
 		c = &s->ctls[CTL_GLOBAL_VOLUME];
-		if (! c->elem)
-			return NULL;
-	}
+	if (! c->elem)
+		c = &s->ctls[CTL_SINGLE];
+	if (! c->elem)
+		return NULL;
 	if (c->type != SND_CTL_ELEM_TYPE_INTEGER)
 		return NULL;
 	return c;
@@ -1174,7 +1176,7 @@ static int get_dB_range(snd_hctl_elem_t *ctl, struct selem_str *rec,
 
 	return snd_tlv_get_dB_range(rec->db_info, rec->min, rec->max, min, max);
 }
-	
+
 static int get_dB_range_ops(snd_mixer_elem_t *elem, int dir,
 			    long *min, long *max)
 {
@@ -1215,9 +1217,9 @@ static int ask_vol_dB_ops(snd_mixer_elem_t *elem,
 }
 
 static int get_dB_ops(snd_mixer_elem_t *elem,
-                      int dir,
-                      snd_mixer_selem_channel_id_t channel,
-                      long *value)
+		      int dir,
+		      snd_mixer_selem_channel_id_t channel,
+		      long *value)
 {
 	selem_none_t *s = snd_mixer_elem_get_private(elem);
 	selem_ctl_t *c;
@@ -1247,6 +1249,8 @@ static int get_switch_ops(snd_mixer_elem_t *elem, int dir,
 		dir = SM_PLAY;
 	if ((unsigned int) channel >= s->str[dir].channels)
 		return -EINVAL;
+	if (channel < 0 || channel > 31)
+		return -EINVAL;
 	*value = !!(s->str[dir].sw & (1 << channel));
 	return 0;
 }
@@ -1264,7 +1268,7 @@ static int set_volume_ops(snd_mixer_elem_t *elem, int dir,
 }
 
 static int ask_dB_vol_ops(snd_mixer_elem_t *elem, int dir,
-		          long dbValue, long *value, int xdir)
+			  long dbValue, long *value, int xdir)
 {
 	selem_none_t *s = snd_mixer_elem_get_private(elem);
 	selem_ctl_t *c;
@@ -1446,7 +1450,7 @@ static int simple_add1(snd_mixer_class_t *class, const char *name,
 		if (ctype == SND_CTL_ELEM_TYPE_ENUMERATED)
 			type = CTL_GLOBAL_ENUM;
 		else if (ctype != SND_CTL_ELEM_TYPE_BOOLEAN &&
-		         ctype != SND_CTL_ELEM_TYPE_INTEGER)
+			 ctype != SND_CTL_ELEM_TYPE_INTEGER)
 			return 0;
 		break;
 	case CTL_GLOBAL_ROUTE:
@@ -1552,9 +1556,11 @@ static int simple_add1(snd_mixer_class_t *class, const char *name,
 		snd_mixer_selem_id_free(id);
 	}
 	if (simple->ctls[type].elem) {
-		SNDERR("helem (%s,'%s',%u,%u,%u) appears twice or more",
-		       snd_ctl_elem_iface_name(
-				snd_hctl_elem_get_interface(helem)),
+		snd_error(MIXER, "helem (%s,'%s',%u,%u,%u) appears twice or more",
+				 snd_ctl_elem_iface_name(
+
+					  snd_hctl_elem_get_interface(helem)),
+
 		       snd_hctl_elem_get_name(helem),
 		       snd_hctl_elem_get_index(helem),
 		       snd_hctl_elem_get_device(helem),

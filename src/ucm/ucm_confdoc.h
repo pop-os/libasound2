@@ -63,7 +63,7 @@ use case verbs for that sound card. i.e.:
 # Example master file for blah sound card
 # By Joe Blogs <joe@bloggs.org>
 
-Syntax 6
+Syntax 8
 
 # Use Case name for user interface
 Comment "Nice Abstracted Soundcard"
@@ -78,6 +78,31 @@ SectionUseCase."Voice Call" {
 SectionUseCase."HiFi" {
   File "hifi_blah"
   Comment "Play and record HiFi quality Music."
+}
+
+# Since Syntax 8, you can also use Config to specify configuration inline
+# instead of referencing an external file. Only one of File or Config can be used.
+
+SectionUseCase."Inline Example" {
+  Comment "Example with inline configuration"
+  Config {
+    SectionVerb {
+      EnableSequence [
+        cset "name='Power Save' off"
+      ]
+      DisableSequence [
+        cset "name='Power Save' on"
+      ]
+    }
+    SectionDevice."Speaker" {
+      EnableSequence [
+        cset "name='Speaker Switch' on"
+      ]
+      DisableSequence [
+        cset "name='Speaker Switch' off"
+      ]
+    }
+  }
 }
 
 # Define Value defaults
@@ -266,12 +291,164 @@ a whitespace between name and index (like 'Line 1') for the better
 readability. The device names 'Line 1' and 'Line1' are equal for
 this purpose.
 
+#### Automatic device index assignment (Syntax 8+)
+
+Starting with **Syntax 8**, device names can include a colon (':') character to enable
+automatic device index assignment. When a device name contains a colon, the UCM parser
+will automatically assign an available numeric index and remove everything after and
+including the colon character.
+
+The automatic assignment ensures that the generated device name is unique within the verb
+by finding the first available index starting from 1. If a name conflict is detected,
+the index is automatically incremented until a unique name is found (up to index 99).
+
+This feature is particularly useful for dynamically creating multiple instances of similar
+devices without manually managing index numbers. The text after the colon is required and
+serves as a descriptive identifier in the source configuration to help distinguish between
+devices, but is not part of the final device name.
+
+Example - Automatic HDMI device indexing:
+
+~~~{.html}
+SectionDevice."HDMI:primary" {
+  Comment "First HDMI output (will become HDMI1)"
+  EnableSequence [
+    cset "name='HDMI Switch' on"
+  ]
+  Value {
+    PlaybackPCM "hw:${CardId},3"
+  }
+}
+
+SectionDevice."HDMI:secondary" {
+  Comment "Second HDMI output (will become HDMI2)"
+  EnableSequence [
+    cset "name='HDMI2 Switch' on"
+  ]
+  Value {
+    PlaybackPCM "hw:${CardId},7"
+  }
+}
+~~~
+
+Example - Automatic Line device indexing with descriptive identifiers:
+
+~~~{.html}
+SectionDevice."Line:front" {
+  Comment "Front line input (will become Line1)"
+  EnableSequence [
+    cset "name='Front Line In Switch' on"
+  ]
+  Value {
+    CapturePCM "hw:${CardId},0"
+  }
+}
+
+SectionDevice."Line:rear" {
+  Comment "Rear line input (will become Line2)"
+  EnableSequence [
+    cset "name='Rear Line In Switch' on"
+  ]
+  Value {
+    CapturePCM "hw:${CardId},1"
+  }
+}
+~~~
+
+Example - Mixed manual and automatic indexing:
+
+~~~{.html}
+# Manually named device
+SectionDevice."Speaker" {
+  Comment "Main speaker output"
+  EnableSequence [
+    cset "name='Speaker Switch' on"
+  ]
+}
+
+# Auto-indexed devices with descriptive identifiers
+SectionDevice."Mic:digital" {
+  Comment "Digital microphone (will become Mic1)"
+  EnableSequence [
+    cset "name='Digital Mic Switch' on"
+  ]
+  Value {
+    CapturePCM "hw:${CardId},2"
+  }
+}
+
+SectionDevice."Mic:headphone" {
+  Comment "Headphone microphone (will become Mic2)"
+  EnableSequence [
+    cset "name='Headphone Mic Switch' on"
+  ]
+  Value {
+    CapturePCM "hw:${CardId},3"
+  }
+}
+~~~
+
 If EnableSequence/DisableSequence controls independent paths in the hardware
 it is also recommended to split playback and capture UCM devices and use
 the number suffixes. Example use case: Use the integrated microphone
 in the laptop instead the microphone in headphones.
 
 The preference of the devices is determined by the priority value (higher value = higher priority).
+
+#### Device ordering (Syntax 8+)
+
+Starting with **Syntax 8**, devices are automatically sorted based on their priority values.
+The sorting is performed at the end of device management processing, after device renaming
+and index assignment.
+
+The priority key selection order is:
+1. **Priority** - If this value exists, use it as the sorting key
+2. **PlaybackPriority** - If Priority doesn't exist but PlaybackPriority exists, use it
+3. **CapturePriority** - If neither Priority nor PlaybackPriority exist, use CapturePriority
+4. **Fallback** - If no priority value is defined, use the device name for alphabetical sorting
+
+Devices are sorted in **descending order** of priority (higher priority values appear first
+in the device list). When two devices have the same priority value, they are sorted
+alphabetically by device name.
+
+Example - Device priority ordering:
+
+~~~{.html}
+SectionDevice."Speaker" {
+  Comment "Internal speaker"
+  EnableSequence [
+    cset "name='Speaker Switch' on"
+  ]
+  Value {
+    PlaybackPriority 100
+    PlaybackPCM "hw:${CardId},0"
+  }
+}
+
+SectionDevice."Headphones" {
+  Comment "Headphone jack"
+  EnableSequence [
+    cset "name='Headphone Switch' on"
+  ]
+  Value {
+    PlaybackPriority 200
+    PlaybackPCM "hw:${CardId},1"
+  }
+}
+
+SectionDevice."HDMI" {
+  Comment "HDMI output"
+  EnableSequence [
+    cset "name='HDMI Switch' on"
+  ]
+  Value {
+    PlaybackPriority 150
+    PlaybackPCM "hw:${CardId},3"
+  }
+}
+~~~
+
+In this example, the device list will be ordered as: Headphones (200), HDMI (150), Speaker (100).
 
 See the SND_USE_CASE_MOD constants like #SND_USE_CASE_MOD_ECHO_REF for the full list of known modifiers.
 
@@ -284,6 +461,38 @@ the state of the controls to the /var tree and loads the previous state in the n
 boot).
 
 \image html ucm-seq-boot.svg
+
+#### Boot Synchronization (Syntax 8+)
+
+The *BootCardGroup* value in *ValueGlobals* allows multiple sound cards to coordinate
+their boot sequences. This value is detected at boot (alsactl/udev/systemd) time. Boot
+tools can provide boot synchronization information through a control element named
+'Boot' with 64-bit integer type. When present, the UCM library uses this control element
+to coordinate initialization timing.
+
+The 'Boot' control element contains:
+- **index 0**: Boot time in CLOCK_MONOTONIC_RAW (seconds)
+- **index 1**: Restore time in CLOCK_MONOTONIC_RAW (seconds)
+- **index 2**: Primary card number (identifies also group)
+
+The UCM open call waits until the boot timeout has passed or until restore state
+is notified through the synchronization Boot element. The timeout defaults to 30 seconds
+and can be customized using 'BootCardSyncTime' in 'ValueGlobals' (maximum 240 seconds).
+
+If the 'Boot' control element is not present, no boot synchronization is performed.
+
+Other cards in the group (primary card number is different) will have the "Linked"
+value set to "1", allowing UCM configuration files to detect and handle secondary
+cards appropriately.
+
+Example configuration:
+
+~~~{.html}
+ValueGlobals {
+  BootCardGroup "amd-acp"
+  BootCardSyncTime 10 # seconds
+}
+~~~
 
 ### Device volume
 
@@ -376,39 +585,74 @@ Evaluation order   | Configuration block | Evaluation restart
 ------------------:|---------------------|--------------------
 1                  | Define              | No
 2                  | Include             | Yes
-3                  | If                  | Yes
-
+3                  | Variant             | Yes
+4                  | Macro               | Yes
+5                  | Repeat              | Yes
+6                  | If                  | Yes
 
 ### Substitutions
 
 The dynamic tree identifiers and assigned values in the configuration tree are
 substituted. The substitutes strings are in the table bellow.
 
-Substituted string   | Value
----------------------|---------------------
-${OpenName}          | Original UCM card name (passed to snd_use_case_mgr_open())
-${ConfLibDir}        | Library top-level configuration directory (e.g. /usr/share/alsa)
-${ConfTopDir}        | Top-level UCM configuration directory (e.g. /usr/share/alsa/ucm2)
-${ConfDir}           | Card's UCM configuration directory (e.g. /usr/share/alsa/ucm2/conf.d/USB-Audio)
-${ConfName}          | Configuration name (e.g. USB-Audio.conf)
-${CardNumber}        | Real ALSA card number (or empty string for the virtual UCM card)
-${CardId}            | ALSA card identifier (see snd_ctl_card_info_get_id())
-${CardDriver}        | ALSA card driver (see snd_ctl_card_info_get_driver())
-${CardName}          | ALSA card name (see snd_ctl_card_info_get_name())
-${CardLongName}      | ALSA card long name (see snd_ctl_card_info_get_longname())
-${CardComponents}    | ALSA card components (see snd_ctl_card_info_get_components())
-${env:<str>}         | Environment variable <str>
-${sys:<str>}         | Contents of sysfs file <str>
-${var:<str>}         | UCM parser variable (set using a _Define_ block)
-${eval:<str>}        | Evaluate expression like *($var+2)/3* [**Syntax 5**]
-${find-card:<str>}   | Find a card - see _Find card substitution_ section
-${find-device:<str>} | Find a device - see _Find device substitution_ section
+Substituted string     | Value
+-----------------------|---------------------
+${LibCaps}             | Library capabilities (string like '*a*b*c*') [**Syntax 8**]
+${OpenName}            | Original UCM card name (passed to snd_use_case_mgr_open())
+${ConfLibDir}          | Library top-level configuration directory (e.g. /usr/share/alsa)
+${ConfTopDir}          | Top-level UCM configuration directory (e.g. /usr/share/alsa/ucm2)
+${ConfDir}             | Card's UCM configuration directory (e.g. /usr/share/alsa/ucm2/conf.d/USB-Audio)
+${ConfName}            | Configuration name (e.g. USB-Audio.conf)
+${CardNumber}          | Real ALSA card number (or empty string for the virtual UCM card)
+${CardId}              | ALSA card identifier (see snd_ctl_card_info_get_id())
+${CardDriver}          | ALSA card driver (see snd_ctl_card_info_get_driver())
+${CardName}            | ALSA card name (see snd_ctl_card_info_get_name())
+${CardLongName}        | ALSA card long name (see snd_ctl_card_info_get_longname())
+${CardComponents}      | ALSA card components (see snd_ctl_card_info_get_components())
+${env:\<str\>}         | Environment variable \<str\>
+${sys:\<str\>}         | Contents of sysfs file \<str\>
+${sys-card:\<str\>}    | Contents of sysfs file in /sys/class/sound/card? tree [**Syntax 8**]
+${var:\<str\>}         | UCM parser variable (set using a _Define_ block)
+${eval:\<str\>}        | Evaluate expression like *($var+2)/3* [**Syntax 5**]
+${find-card:\<str\>}   | Find a card - see _Find card substitution_ section
+${find-device:\<str\>} | Find a device - see _Find device substitution_ section
+${info-card:\<str\>}   | Get card information - see _Card info substitution_ section [**Syntax 9**]
+
+General note: If two dollars '$$' instead one dolar '$' are used for the
+substitution identification, the error is ignored (e.g. file does not
+exists in sysfs tree).
+
+Note for *var* substitution: If the first characters is minus ('-') the
+empty string is substituted when the variable is not defined.
+
+Note for *sys* and *sys-card* substitutions: since syntax 8, there is
+also extension to fetch data from given range with the optional conversion
+to hexadecimal format when the source file has binary contents.
+
+Example - fetch bytes from positions 0x10..0x15 (6 bytes):
+
+~~~{.html}
+Define.Bytes1 "${sys-card:[type=hex,pos=0x10,size=6]device/../descriptors}"
+~~~
+
+Example - fetch one byte from position 0x22:
+
+~~~{.html}
+Define.Bytes2 "${sys-card:[type=hex,pos=0x22]device/../descriptors}"
+~~~
+
+Replace *type=hex* with *type=ascii* or omit this variable settings to work with ASCII characters.
+
+
+#### Library capabilities
+
+None at the moment. The list will grow after *Syntax 8* (library 1.2.14).
 
 #### Special whole string substitution
 
 Substituted string   | Value
 ---------------------|---------------------
-${evali:<str>}       | Evaluate expression like *($var+2)/3* [**Syntax 6**]; target node will be integer; substituted only in the LibraryConfig subtree
+${evali:\<str\>}       | Evaluate expression like *($var+2)/3* [**Syntax 6**]; target node will be integer; substituted only in the LibraryConfig subtree
 
 #### Find card substitution
 
@@ -419,6 +663,7 @@ Usage example:
 
 ~~~{.html}
 ${find-card:field=name,regex='^acp$',return=number}
+${find-card:field=$FieldName,regex=$Pattern,return=number}
 ~~~
 
 Arguments:
@@ -426,8 +671,8 @@ Arguments:
 Argument             | Description
 ---------------------|-----------------------
 return               | return value type (id, number), id is the default
-field                | field for the lookup (id, driver, name, longname, mixername, components)
-regex                | regex string for the field match
+field                | field for the lookup (id, driver, name, longname, mixername, components) or variable name ($var) [**Syntax 9**]
+regex                | regex string for the field match or variable name ($var) [**Syntax 9**]
 
 #### Find device substitution
 
@@ -435,16 +680,50 @@ Usage example:
 
 ~~~{.html}
 ${find-device:type=pcm,field=name,regex='DMIC'}
+${find-device:type=$DevType,stream=$StreamType,field=$FieldName,regex=$Pattern}
 ~~~
 
 Arguments:
 
 Argument             | Description
 ---------------------|-----------------------
-type                 | device type (pcm)
-stream               | stream type (playback, capture), playback is default
-field                | field for the lookup (id, name, subname)
-regex                | regex string for the field match
+type                 | device type (pcm) or variable name ($var) [**Syntax 9**]
+stream               | stream type (playback, capture), playback is default; variable name ($var) supported in **Syntax 9**
+field                | field for the lookup (id, name, subname) or variable name ($var) [**Syntax 9**]
+regex                | regex string for the field match or variable name ($var) [**Syntax 9**]
+
+#### Card info substitution
+
+This substitution retrieves information about a specific ALSA card by card number
+or card ID and returns the requested field value.
+
+Usage examples:
+
+~~~{.html}
+${info-card:card=0,field=name}
+${info-card:card=acp,field=driver}
+${info-card:card=PCH,field=longname}
+${info-card:card=$MyCard,field=$MyField}
+~~~
+
+Arguments:
+
+Argument             | Description
+---------------------|--------------------------------------------------
+card                 | card number (integer), card ID (string), or variable name ($var)
+field                | field to retrieve (number, id, driver, name, longname, mixername, components) or variable name ($var)
+
+The **card** parameter can be either a card number (e.g., 0, 1, 2), a card ID string (e.g., "PCH", "acp", "Intel"),
+or a variable name prefixed with $ (e.g., $CardId).
+
+The **field** parameter specifies which card information to return or can be a variable name prefixed with $ (e.g., $FieldName):
+- **number**: Card number (integer as string)
+- **id**: Card identifier
+- **driver**: Card driver name
+- **name**: Card short name
+- **longname**: Card long name
+- **mixername**: Mixer name
+- **components**: Card components
 
 
 ### Variable defines
@@ -459,19 +738,135 @@ Define {
 }
 ~~~
 
-The *DefineRegex* allows substring extraction like:
+The *DefineRegex* allows substring extraction using regular expressions (POSIX extended regex).
+It can match patterns in strings and extract matched substrings into UCM variables.
+
+#### DefineRegex Structure
 
 ~~~{.html}
-DefineRegex.rval {
-  Regex "(hello)|(regex)"
-  String "hello, it's my regex"
+DefineRegex.name {
+  String "text to match against"
+  Regex "regex_pattern"
+  Flags "e"
+  Scheme "first"
 }
 ~~~
 
-The result will be stored to variables *rval1* as *hello* and *rval2* as *regex* (every matched
-substrings are stored to a separate variable with the sequence number postfix.
+Field                | Description
+---------------------|---------------------
+String               | The input string to match the regex pattern against
+Regex                | POSIX extended regular expression pattern
+Flags                | Optional regex flags (see below)
+Scheme               | Matching scheme: "first" (default) or "all" [**Syntax 9**]
 
-Variables can be substituted using the `${var:rval1}` reference for example.
+#### Regex Flags
+
+The Flags field is optional and accepts the following characters:
+
+Flag   | Description
+-------|---------------------
+e      | Extended POSIX regex (REG_EXTENDED) - default recommended
+i      | Case-insensitive matching (REG_ICASE)
+s      | Report only success/fail (REG_NOSUB)
+n      | Newline-sensitive matching (REG_NEWLINE)
+
+Multiple flags can be combined, e.g., "ei" for extended and case-insensitive.
+
+#### Matching Schemes
+
+**Scheme "first"** (default): Matches the pattern once and extracts capture groups
+
+The variables created are:
+- `name` - the full matched string
+- `name1` - first capture group (parentheses in regex)
+- `name2` - second capture group
+- `nameN` - Nth capture group
+
+Example with "first" scheme:
+
+~~~{.html}
+DefineRegex.hwdev {
+  String "hw:2,0"
+  Regex "hw:([0-9]+),([0-9]+)"
+  Flags "e"
+  Scheme "first"
+}
+~~~
+
+This creates variables:
+- `hwdev` = "hw:2,0" (full match)
+- `hwdev1` = "2" (first capture group - card number)
+- `hwdev2` = "0" (second capture group - device number)
+
+**Scheme "all"** [**Syntax 9**]: Matches the pattern multiple times and extracts all matches
+
+The variables created are:
+- `nameN` - Nth full match (N starts at 1)
+- `nameN_1` - Nth match, first capture group
+- `nameN_2` - Nth match, second capture group
+- `nameN_M` - Nth match, Mth capture group
+
+Example with "all" scheme:
+
+~~~{.html}
+DefineRegex.devices {
+  String "device1 device2 device3"
+  Regex "device([0-9]+)"
+  Flags "e"
+  Scheme "all"
+}
+~~~
+
+This creates variables:
+- `devices1` = "device1" (first full match)
+- `devices1_1` = "1" (first match, capture group 1)
+- `devices2` = "device2" (second full match)
+- `devices2_1` = "2" (second match, capture group 1)
+- `devices3` = "device3" (third full match)
+- `devices3_1` = "3" (third match, capture group 1)
+
+#### Practical Examples
+
+Extract USB device vendor and product IDs:
+
+~~~{.html}
+DefineRegex.usbids {
+  String "${sys:bus/usb/devices/1-1/uevent}"
+  Regex "PRODUCT=([0-9a-f]+)/([0-9a-f]+)"
+  Flags "e"
+  Scheme "first"
+}
+# Creates: usbids (full match), usbids1 (vendor), usbids2 (product)
+~~~
+
+Parse multiple key=value pairs:
+
+~~~{.html}
+DefineRegex.params {
+  String "rate=48000,channels=2,format=S16_LE"
+  Regex "([a-z]+)=([^,]+)"
+  Flags "e"
+  Scheme "all"
+}
+# Creates: params1="rate=48000", params1_1="rate", params1_2="48000"
+#          params2="channels=2", params2_1="channels", params2_2="2"
+#          params3="format=S16_LE", params3_1="format", params3_2="S16_LE"
+~~~
+
+Extract text components:
+
+~~~{.html}
+DefineRegex.model {
+  String "USB Audio Device Model XYZ123"
+  Regex "([A-Z]+).*Model ([A-Z0-9]+)"
+  Flags "e"
+  Scheme "first"
+}
+# Creates: model (full match), model1="USB", model2="XYZ123"
+~~~
+
+Variables can be substituted using `${var:name}` reference. For example, to use the extracted
+card number: `PlaybackPCM "hw:${var:hwdev1},0"`
 
 ### Macros
 
@@ -489,7 +884,8 @@ DefineMacro.macro1 {
 The arguments in the macro are refered as the variables with the double
 underscore name prefix (like *__variable*). The configuration block in
 the DefineMacro subtree is always evaluated (including arguments and variables)
-at the time of the instantiation.
+at the time of the instantiation. Argument string substitutions
+(for multiple macro call levels) were added in *Syntax* version *7*.
 
 The macros can be instantiated (expanded) using:
 
@@ -515,6 +911,14 @@ must define a *Condition* block and *True* or *False* blocks or both. The *True*
 blocks will be merged to the parent tree (where the *If* block is defined) when
 the *Condition* is evaluated.
 
+Starting with *Syntax* version *8*, *If* blocks can also include *Prepend* and *Append*
+configuration blocks. These blocks are always merged to the parent tree, independent of the
+condition evaluation result:
+- *Prepend* block is merged before the condition result (*True* or *False* block)
+- *Append* block is merged after the condition result (*True* or *False* block)
+- Both *Prepend* and *Append* can be specified simultaneously
+- When *Prepend* or *Append* is present, the *Condition* directive can be omitted
+
 Example:
 
 ~~~{.html}
@@ -527,6 +931,38 @@ If.uniqueid {
   True {
     Define.a a
     define.b b
+  }
+}
+~~~
+
+Example with Prepend and Append (*Syntax* version *8*+):
+
+~~~{.html}
+If.setup {
+  Prepend {
+    Define.before "prepended"
+  }
+  Condition {
+    Type AlwaysTrue
+  }
+  True {
+    Define.middle "conditional"
+  }
+  Append {
+    Define.after "appended"
+  }
+}
+~~~
+
+Example with Prepend/Append only (no Condition, *Syntax* version *8*+):
+
+~~~{.html}
+If.common {
+  Prepend {
+    Define.x "always executed"
+  }
+  Append {
+    Define.y "also always executed"
   }
 }
 ~~~
@@ -563,6 +999,15 @@ Field                | Description
 String               | string
 Regex                | regex expression (extended posix, ignore case)
 
+#### Path is present (Type Path)
+
+Field                | Description
+---------------------|-----------------------
+Path                 | path (filename)
+Mode                 | exist,read,write,exec
+
+Note: Substitution for Path and Mode fields were added in *Syntax* version *7*.
+
 #### ALSA control element exists (Type ControlExists)
 
 Field                | Description
@@ -578,6 +1023,32 @@ If.fmic {
   Condition {
     Type ControlExists
     Control "name='Front Mic Playback Switch'"
+  }
+  True {
+    ...
+  }
+}
+~~~
+
+#### Integer comparison (Type Integer)
+
+Field                | Description
+---------------------|-----------------------
+Operation            | comparison operator (==, !=, <, >, <=, >=)
+Value1               | first integer value (string converted to long long)
+Value2               | second integer value (string converted to long long)
+
+Note: Integer condition is supported in *Syntax* version *9*+.
+
+Example:
+
+~~~{.html}
+If.check_channels {
+  Condition {
+    Type Integer
+    Operation ">"
+    Value1 "${var:channels}"
+    Value2 "2"
   }
   True {
     ...
@@ -620,6 +1091,208 @@ SectionDevice."Speaker" {
   }
 }
 ~~~
+
+### Device Variants
+
+Starting with **Syntax 8**, devices can define variants using the *DeviceVariant* block.
+Device variants provide a convenient way to define multiple related devices with different
+configurations (such as different channel counts) in a single device definition.
+
+When a device name contains a colon (':') character and the device configuration includes
+*DeviceVariant* blocks, the UCM parser handles variant configuration in two ways:
+
+1. **Primary device configuration**: If the text after the colon (variant label) matches a
+   variant identifier in the *DeviceVariant* block, that variant's configuration is merged
+   with the primary device configuration before parsing. This allows the primary device to
+   inherit base configuration while overriding specific values from the variant.
+
+2. **Additional variant devices**: The UCM parser automatically creates multiple distinct
+   UCM devices:
+   - The base device (with the name specified in the *Device* or *SectionDevice* block)
+   - One additional device for each *DeviceVariant* block
+
+Each variant device name is constructed by combining the base device name with the variant
+identifier. Variant devices are automatically added to the base device's conflicting device
+list, since these configurations are mutually exclusive (e.g., you cannot use 2.0, 5.1, and
+7.1 speaker configurations simultaneously).
+
+Example - Speaker with multiple channel configurations:
+
+~~~{.html}
+Device."Speaker:2.0" {
+  Value {
+    PlaybackChannels 2
+  }
+  DeviceVariant."5.1".Value {
+    PlaybackChannels 6
+  }
+  DeviceVariant."7.1".Value {
+    PlaybackChannels 8
+  }
+}
+~~~
+
+This configuration creates three UCM devices:
+- **Speaker:2.0** - 2 playback channels (base device)
+- **Speaker:5.1** - 6 playback channels (variant)
+- **Speaker:7.1** - 8 playback channels (variant)
+
+The variant devices (**Speaker:5.1** and **Speaker:7.1**) inherit all configuration from the
+base device and override only the values specified in their *DeviceVariant* block. The devices
+are automatically marked as conflicting with each other.
+
+Example - HDMI output with different sample rates:
+
+~~~{.html}
+SectionDevice."HDMI:LowRate" {
+  Comment "HDMI output - standard rate"
+  EnableSequence [
+    cset "name='HDMI Switch' on"
+  ]
+  Value {
+    PlaybackPCM "hw:${CardId},3"
+    PlaybackRate 48000
+  }
+  DeviceVariant."HighRate" {
+    Comment "HDMI output - high sample rate"
+    Value {
+      PlaybackRate 192000
+    }
+  }
+}
+~~~
+
+This creates two devices: **HDMI:LowRate** (48kHz) and **HDMI:HighRate** (192kHz).
+
+### Repetitive Pattern Substitution
+
+Starting with **Syntax 9**, the UCM configuration supports the **Repeat** block for generating
+repetitive configuration patterns. This feature allows you to apply a configuration block multiple
+times with different variable values, reducing duplication in configuration files.
+
+The **Repeat** block contains two main components:
+
+1. **Pattern**: Defines the iteration pattern (how many times to repeat and what values to use)
+2. **Apply**: The configuration block to be applied on each iteration
+
+#### Pattern Types
+
+The **Pattern** block supports two types: **Integer** and **Array**.
+
+**Integer Pattern**: Iterates over a range of integer values
+
+~~~{.html}
+Repeat.MyRepeat {
+  Pattern {
+    Variable 'ChannelNum'
+    Type Integer
+    First 0
+    Last 15
+    Step 2
+  }
+  Apply {
+    ... configuration using ${var:ChannelNum} ...
+  }
+}
+~~~
+
+Fields for Integer pattern:
+- **Variable**: Name of the variable to substitute (without ${var:} prefix)
+- **Type**: Must be "Integer"
+- **First**: Starting value (integer)
+- **Last**: Ending value (integer)
+- **Step**: Increment value (integer, default 1)
+
+The iteration supports reverse order automatically when First is greater than Last.
+
+**Array Pattern**: Iterates over a list of string values
+
+~~~{.html}
+Repeat.DeviceList {
+  Pattern {
+    Variable 'DevName'
+    Type Array
+    Array [
+      "Speaker"
+      "Headphones"
+      "HDMI"
+    ]
+  }
+  Apply {
+    ... configuration using ${var:DevName} ...
+  }
+}
+~~~
+
+Fields for Array pattern:
+- **Variable**: Name of the variable to substitute (without ${var:} prefix)
+- **Type**: Must be "Array"
+- **Array**: A compound node containing string values to iterate over
+
+**String Pattern**: Pattern can also be specified as a string that will be parsed as a
+configuration block. This allows for dynamic pattern generation.
+
+~~~{.html}
+Repeat.Dynamic {
+  Pattern "
+    Variable 'Index'
+    Type Integer
+    First 1
+    Last 4
+  "
+  Apply {
+    ... configuration using ${var:Index} ...
+  }
+}
+~~~
+
+#### Complete Example
+
+Example using Integer pattern to create multiple similar control settings:
+
+~~~{.html}
+EnableSequence [
+  Repeat.VolumeInit {
+    Pattern {
+      Variable 'ch'
+      Type Integer
+      First 0
+      Last 7
+    }
+    Apply {
+      cset "name='PCM Channel ${var:ch} Volume' 100%"
+    }
+  }
+]
+~~~
+
+This generates 8 cset commands for channels 0 through 7.
+
+Example using Array pattern for different device configurations:
+
+~~~{.html}
+Repeat.Devices {
+  Pattern {
+    Variable 'output'
+    Type Array
+    Array [
+      "Speaker"
+      "Headphones"
+      "LineOut"
+    ]
+  }
+  Apply {
+    SectionDevice."${var:output}" {
+      Comment "${var:output} Output"
+      EnableSequence [
+        cset "name='${var:output} Switch' on"
+      ]
+    }
+  }
+}
+~~~
+
+This creates three SectionDevice blocks for Speaker, Headphones, and LineOut.
 
 */
 

@@ -13,11 +13,10 @@
   GNU Lesser General Public License for more details.
 
   Authors: Mengdong Lin <mengdong.lin@intel.com>
-           Yao Jin <yao.jin@intel.com>
-           Liam Girdwood <liam.r.girdwood@linux.intel.com>
+	   Yao Jin <yao.jin@intel.com>
+	   Liam Girdwood <liam.r.girdwood@linux.intel.com>
 */
 
-#include "list.h"
 #include "tplg_local.h"
 
 /* mapping of channel text names to types */
@@ -99,12 +98,13 @@ int tplg_parse_channel(snd_tplg_t *tplg, snd_config_t *cfg,
 		return -EINVAL;
 
 	channel += tplg->channel_idx;
-	snd_config_get_id(cfg, &id);
+	if (snd_config_get_id(cfg, &id) < 0)
+		return -EINVAL;
 	tplg_dbg("\tChannel %s at index %d", id, tplg->channel_idx);
 
 	channel_id = lookup_channel(id);
 	if (channel_id < 0) {
-		SNDERR("invalid channel %s", id);
+		snd_error(TOPOLOGY, "invalid channel %s", id);
 		return -EINVAL;
 	}
 

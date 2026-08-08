@@ -1,0 +1,7 @@
+ALSA_0.9 {
+  global:
+    snd_*;
+
+  local:
+    *;
+};

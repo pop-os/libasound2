@@ -25,13 +25,12 @@
  *   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
-  
-#include "bswap.h"
-#include <math.h>
+
 #include "pcm_local.h"
 #include "pcm_plugin.h"
-
 #include "plugin_ops.h"
+#include "bswap.h"
+#include <math.h>
 
 #ifndef PIC
 /* entry for static linking */
@@ -156,7 +155,7 @@ static void snd_pcm_route_convert1_one(const snd_pcm_channel_area_t *dst_area,
 					    frames, ttable, params);
 		return;
 	}
-	
+
 	conv = conv_labels[params->conv_idx];
 	src = snd_pcm_channel_area_addr(src_area, src_offset);
 	dst = snd_pcm_channel_area_addr(dst_area, dst_offset);
@@ -207,7 +206,7 @@ static void snd_pcm_route_convert1_one_getput(const snd_pcm_channel_area_t *dst_
 					    frames, ttable, params);
 		return;
 	}
-	
+
 	get = get32_labels[params->get_idx];
 	put = put32_labels[params->put_idx];
 	src = snd_pcm_channel_area_addr(src_area, src_offset);
@@ -316,7 +315,7 @@ static void snd_pcm_route_convert1_many(const snd_pcm_channel_area_t *dst_area,
 
 		/* Zero sum */
 		goto *zero;
-	zero_int64: 
+	zero_int64:
 		sum.as_sint64 = 0;
 		goto zero_end;
 #if SND_PCM_PLUGIN_ROUTE_FLOAT
@@ -326,14 +325,22 @@ static void snd_pcm_route_convert1_many(const snd_pcm_channel_area_t *dst_area,
 #endif
 	zero_end:
 		for (srcidx = 0; srcidx < nsrcs; ++srcidx) {
-			const char *src = srcs[srcidx];
-			
+			const char *src;
+#if defined(__GNUC__) && __GNUC__ >= 8
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+			src = srcs[srcidx];
+
 			/* Get sample */
 			goto *get32;
 #define GET32_END after_get
 #include "plugin_ops.h"
 #undef GET32_END
 		after_get:
+#if defined(__GNUC__) && __GNUC__ >= 8
+#pragma GCC diagnostic pop
+#endif
 
 			/* Sum */
 			goto *add;
@@ -357,7 +364,7 @@ static void snd_pcm_route_convert1_many(const snd_pcm_channel_area_t *dst_area,
 			srcs[srcidx] += src_steps[srcidx];
 			ttp++;
 		}
-		
+
 		/* Normalization */
 		goto *norm;
 	norm_int64_att:
@@ -384,14 +391,14 @@ static void snd_pcm_route_convert1_many(const snd_pcm_channel_area_t *dst_area,
 		goto after_norm;
 #endif
 	after_norm:
-		
+
 		/* Put sample */
 		goto *put32;
 #define PUT32_END after_put32
 #include "plugin_ops.h"
 #undef PUT32_END
 	after_put32:
-		
+
 		dst += dst_step;
 	}
 }
@@ -500,7 +507,7 @@ static int snd_pcm_route_hw_refine_schange(snd_pcm_t *pcm, snd_pcm_hw_params_t *
 			      SND_PCM_HW_PARBIT_BUFFER_TIME |
 			      SND_PCM_HW_PARBIT_TICK_TIME);
 	if (route->sformat == SND_PCM_FORMAT_UNKNOWN)
-		links |= (SND_PCM_HW_PARBIT_FORMAT | 
+		links |= (SND_PCM_HW_PARBIT_FORMAT |
 			  SND_PCM_HW_PARBIT_SUBFORMAT |
 			  SND_PCM_HW_PARBIT_SAMPLE_BITS);
 	if (route->schannels < 0)
@@ -510,7 +517,7 @@ static int snd_pcm_route_hw_refine_schange(snd_pcm_t *pcm, snd_pcm_hw_params_t *
 		return err;
 	return 0;
 }
-	
+
 static int snd_pcm_route_hw_refine_cchange(snd_pcm_t *pcm, snd_pcm_hw_params_t *params,
 					    snd_pcm_hw_params_t *sparams)
 {
@@ -524,7 +531,7 @@ static int snd_pcm_route_hw_refine_cchange(snd_pcm_t *pcm, snd_pcm_hw_params_t *
 			      SND_PCM_HW_PARBIT_BUFFER_TIME |
 			      SND_PCM_HW_PARBIT_TICK_TIME);
 	if (route->sformat == SND_PCM_FORMAT_UNKNOWN)
-		links |= (SND_PCM_HW_PARBIT_FORMAT | 
+		links |= (SND_PCM_HW_PARBIT_FORMAT |
 			  SND_PCM_HW_PARBIT_SUBFORMAT |
 			  SND_PCM_HW_PARBIT_SAMPLE_BITS);
 	if (route->schannels < 0)
@@ -600,7 +607,7 @@ snd_pcm_route_write_areas(snd_pcm_t *pcm,
 	if (size > *slave_sizep)
 		size = *slave_sizep;
 	snd_pcm_route_convert(slave_areas, slave_offset,
-			      areas, offset, 
+			      areas, offset,
 			      pcm->channels,
 			      slave->channels,
 			      size, &route->params);
@@ -621,7 +628,7 @@ snd_pcm_route_read_areas(snd_pcm_t *pcm,
 	snd_pcm_t *slave = route->plug.gen.slave;
 	if (size > *slave_sizep)
 		size = *slave_sizep;
-	snd_pcm_route_convert(areas, offset, 
+	snd_pcm_route_convert(areas, offset,
 			      slave_areas, slave_offset,
 			      slave->channels,
 			      pcm->channels,
@@ -687,7 +694,7 @@ static void snd_pcm_route_dump(snd_pcm_t *pcm, snd_output_t *out)
 	if (route->sformat == SND_PCM_FORMAT_UNKNOWN)
 		snd_output_printf(out, "Route conversion PCM\n");
 	else
-		snd_output_printf(out, "Route conversion PCM (sformat=%s)\n", 
+		snd_output_printf(out, "Route conversion PCM (sformat=%s)\n",
 			snd_pcm_format_name(route->sformat));
 	snd_output_puts(out, "  Transformation table:\n");
 	for (dst = 0; dst < route->params.ndsts; dst++) {
@@ -766,7 +773,9 @@ static int strtochannel(const char *id, snd_pcm_chmap_t *chmap,
 	}
 }
 
+#ifndef DOC_HIDDEN
 #define MAX_CHMAP_CHANNELS 256
+#endif
 
 static int determine_chmap(snd_config_t *tt, snd_pcm_chmap_t **tt_chmap)
 {
@@ -809,7 +818,7 @@ static int determine_chmap(snd_config_t *tt, snd_pcm_chmap_t **tt_chmap)
 				continue;
 
 			if (chmap->channels >= MAX_CHMAP_CHANNELS) {
-				SNDERR("Too many channels in ttable chmap");
+				snd_error(PCM, "Too many channels in ttable chmap");
 				goto err;
 			}
 			chmap->pos[chmap->channels++] = ch;
@@ -874,7 +883,7 @@ static int find_matching_chmap(snd_pcm_chmap_query_t **chmaps,
 	}
 
 	if (*found_chmap == NULL) {
-		SNDERR("Found no matching channel map");
+		snd_error(PCM, "Found no matching channel map");
 		return -EINVAL;
 	}
 	return 0;
@@ -1024,7 +1033,7 @@ int snd_pcm_route_open(snd_pcm_t **pcmp, const char *name,
 	snd_pcm_route_t *route;
 	int err;
 	assert(pcmp && slave && ttable);
-	if (sformat != SND_PCM_FORMAT_UNKNOWN && 
+	if (sformat != SND_PCM_FORMAT_UNKNOWN &&
 	    snd_pcm_format_linear(sformat) != 1)
 		return -EINVAL;
 	route = calloc(1, sizeof(snd_pcm_route_t));
@@ -1084,7 +1093,7 @@ static int _snd_pcm_route_determine_ttable(snd_config_t *tt,
 			continue;
 		err = safe_strtol(id, &cchannel);
 		if (err < 0) {
-			SNDERR("Invalid client channel: %s", id);
+			snd_error(PCM, "Invalid client channel: %s", id);
 			return -EINVAL;
 		}
 		if (cchannel + 1 > csize)
@@ -1099,7 +1108,7 @@ static int _snd_pcm_route_determine_ttable(snd_config_t *tt,
 				continue;
 			err = strtochannel(id, chmap, &schannel, 1);
 			if (err < 0) {
-				SNDERR("Invalid slave channel: %s", id);
+				snd_error(PCM, "Invalid slave channel: %s", id);
 				return -EINVAL;
 			}
 			if (schannel + 1 > ssize)
@@ -1107,7 +1116,7 @@ static int _snd_pcm_route_determine_ttable(snd_config_t *tt,
 		}
 	}
 	if (csize == 0 || ssize == 0) {
-		SNDERR("Invalid null ttable configuration");
+		snd_error(PCM, "Invalid null ttable configuration");
 		return -EINVAL;
 	}
 	*tt_csize = csize;
@@ -1150,6 +1159,11 @@ static int _snd_pcm_route_load_ttable(snd_config_t *tt, snd_pcm_route_ttable_ent
 	snd_config_iterator_t i, inext;
 	unsigned int k;
 	int err;
+
+	long *scha = alloca(tt_ssize * sizeof(long));
+	if (scha == NULL)
+		return -ENOMEM;
+
 	for (k = 0; k < tt_csize * tt_ssize; ++k)
 		ttable[k] = 0.0;
 	snd_config_for_each(i, inext, tt) {
@@ -1160,9 +1174,9 @@ static int _snd_pcm_route_load_ttable(snd_config_t *tt, snd_pcm_route_ttable_ent
 		if (snd_config_get_id(in, &id) < 0)
 			continue;
 		err = safe_strtol(id, &cchannel);
-		if (err < 0 || 
+		if (err < 0 ||
 		    cchannel < 0 || (unsigned int) cchannel > tt_csize) {
-			SNDERR("Invalid client channel: %s", id);
+			snd_error(PCM, "Invalid client channel: %s", id);
 			return -EINVAL;
 		}
 		if (snd_config_get_type(in) != SND_CONFIG_TYPE_COMPOUND)
@@ -1171,33 +1185,27 @@ static int _snd_pcm_route_load_ttable(snd_config_t *tt, snd_pcm_route_ttable_ent
 			snd_config_t *jnode = snd_config_iterator_entry(j);
 			double value;
 			int ss;
-			long *scha = alloca(tt_ssize * sizeof(long));
 			const char *id;
 			if (snd_config_get_id(jnode, &id) < 0)
 				continue;
 
 			ss = strtochannel(id, chmap, scha, tt_ssize);
 			if (ss < 0) {
-				SNDERR("Invalid slave channel: %s", id);
+				snd_error(PCM, "Invalid slave channel: %s", id);
 				return -EINVAL;
 			}
 
-			err = snd_config_get_real(jnode, &value);
+			err = snd_config_get_ireal(jnode, &value);
 			if (err < 0) {
-				long v;
-				err = snd_config_get_integer(jnode, &v);
-				if (err < 0) {
-					SNDERR("Invalid type for %s", id);
-					return -EINVAL;
-				}
-				value = v;
+				snd_error(PCM, "Invalid type for %s", id);
+				return -EINVAL;
 			}
 
 			for (k = 0; (int) k < ss; k++) {
 				long schannel = scha[k];
 				if (schannel < 0 || (unsigned int) schannel > tt_ssize ||
 				    (schannels > 0 && schannel >= schannels)) {
-					SNDERR("Invalid slave channel: %s", id);
+					snd_error(PCM, "Invalid slave channel: %s", id);
 					return -EINVAL;
 				}
 				ttable[cchannel * tt_ssize + schannel] = value;
@@ -1245,22 +1253,22 @@ If so, a matching channel map will be selected for the slave.
 
 \code
 pcm.name {
-        type route              # Route & Volume conversion PCM
-        slave STR               # Slave name
-        # or
-        slave {                 # Slave definition
-                pcm STR         # Slave PCM name
-                # or
-                pcm { }         # Slave PCM definition
-                [format STR]    # Slave format
-                [channels INT]  # Slave channels
-        }
-        ttable {                # Transfer table (bi-dimensional compound of cchannels * schannels numbers)
-                CCHANNEL {
-                        SCHANNEL REAL   # route value (0.0 - 1.0)
-                }
-        }
-        [chmap MAP]             # Override channel maps; MAP is a string array
+	type route              # Route & Volume conversion PCM
+	slave STR               # Slave name
+	# or
+	slave {                 # Slave definition
+		pcm STR         # Slave PCM name
+		# or
+		pcm { }         # Slave PCM definition
+		[format STR]    # Slave format
+		[channels INT]  # Slave channels
+	}
+	ttable {                # Transfer table (bi-dimensional compound of cchannels * schannels numbers)
+		CCHANNEL {
+			SCHANNEL REAL   # route value (0.0 - 1.0)
+		}
+	}
+	[chmap MAP]             # Override channel maps; MAP is a string array
 }
 \endcode
 
@@ -1287,7 +1295,7 @@ pcm.name {
  *          changed in future.
  */
 int _snd_pcm_route_open(snd_pcm_t **pcmp, const char *name,
-			snd_config_t *root, snd_config_t *conf, 
+			snd_config_t *root, snd_config_t *conf,
 			snd_pcm_stream_t stream, int mode)
 {
 	snd_config_iterator_t i, next;
@@ -1315,7 +1323,7 @@ int _snd_pcm_route_open(snd_pcm_t **pcmp, const char *name,
 		}
 		if (strcmp(id, "ttable") == 0) {
 			if (snd_config_get_type(n) != SND_CONFIG_TYPE_COMPOUND) {
-				SNDERR("Invalid type for %s", id);
+				snd_error(PCM, "Invalid type for %s", id);
 				snd_pcm_free_chmaps(chmaps);
 				return -EINVAL;
 			}
@@ -1325,21 +1333,22 @@ int _snd_pcm_route_open(snd_pcm_t **pcmp, const char *name,
 		if (strcmp(id, "chmap") == 0) {
 			chmaps = _snd_pcm_parse_config_chmaps(n);
 			if (!chmaps) {
-				SNDERR("Invalid channel map for %s", id);
+				snd_error(PCM, "Invalid channel map for %s", id);
 				return -EINVAL;
 			}
 			continue;
 		}
-		SNDERR("Unknown field %s", id);
+		snd_error(PCM, "Unknown field %s", id);
+		snd_pcm_free_chmaps(chmaps);
 		return -EINVAL;
 	}
 	if (!slave) {
-		SNDERR("slave is not defined");
+		snd_error(PCM, "slave is not defined");
 		snd_pcm_free_chmaps(chmaps);
 		return -EINVAL;
 	}
 	if (!tt) {
-		SNDERR("ttable is not defined");
+		snd_error(PCM, "ttable is not defined");
 		snd_pcm_free_chmaps(chmaps);
 		return -EINVAL;
 	}
@@ -1352,15 +1361,16 @@ int _snd_pcm_route_open(snd_pcm_t **pcmp, const char *name,
 	}
 	if (sformat != SND_PCM_FORMAT_UNKNOWN &&
 	    snd_pcm_format_linear(sformat) != 1) {
-	    	snd_config_delete(sconf);
-		SNDERR("slave format is not linear");
+		snd_config_delete(sconf);
+		snd_error(PCM, "slave format is not linear");
 		snd_pcm_free_chmaps(chmaps);
 		return -EINVAL;
 	}
 
 	err = determine_chmap(tt, &tt_chmap);
 	if (err < 0) {
-		free(ttable);
+		snd_config_delete(sconf);
+		snd_pcm_free_chmaps(chmaps);
 		return err;
 	}
 
@@ -1368,7 +1378,6 @@ int _snd_pcm_route_open(snd_pcm_t **pcmp, const char *name,
 	snd_config_delete(sconf);
 	if (err < 0) {
 		free(tt_chmap);
-		free(ttable);
 		snd_pcm_free_chmaps(chmaps);
 		return err;
 	}

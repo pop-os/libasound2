@@ -27,8 +27,8 @@
  *
  */
 
-#include "list.h"
 #include "local.h"
+#include "list.h"
 #ifdef HAVE_LIBPTHREAD
 #include <pthread.h>
 #endif
@@ -170,8 +170,10 @@ EXPORT_SYMBOL void *INTERNAL(snd_dlopen_old)(const char *name, int mode)
 }
 #endif
 
+#ifndef DOC_HIDDEN
 use_symbol_version(__snd_dlopen_old, snd_dlopen, ALSA_0.9);
 use_default_symbol_version(__snd_dlopen, snd_dlopen, ALSA_1.1.6);
+#endif /* DOC_HIDDEN */
 
 /**
  * \brief Closes a dynamic library - ALSA wrapper for \c dlclose.
@@ -209,7 +211,7 @@ static int snd_dlsym_verify(void *handle, const char *name, const char *version)
 #ifdef HAVE_LIBDL
 	int res;
 	char *vname;
-	
+
 	if (handle == NULL)
 		return -EINVAL;
 	vname = alloca(1 + strlen(name) + strlen(version) + 1);
@@ -221,7 +223,7 @@ static int snd_dlsym_verify(void *handle, const char *name, const char *version)
 	res = dlsym(handle, vname) == NULL ? -ENOENT : 0;
 	// printf("dlsym verify: %i, vname = '%s'\n", res, vname);
 	if (res < 0)
-		SNDERR("unable to verify version for symbol %s", name);
+		snd_error(CORE, "unable to verify version for symbol %s", name);
 	return res;
 #else
 	return 0;
@@ -330,21 +332,24 @@ snd_dlobj_cache_get0(const char *lib, const char *name,
 
 	errbuf[0] = '\0';
 	dlobj = INTERNAL(snd_dlopen)(lib, RTLD_NOW,
-	                   verbose ? errbuf : 0,
-	                   verbose ? sizeof(errbuf) : 0);
+			   verbose ? errbuf : 0,
+			   verbose ? sizeof(errbuf) : 0);
 	if (dlobj == NULL) {
 		if (verbose)
-			SNDERR("Cannot open shared library %s (%s)",
-						lib ? lib : "[builtin]",
-						errbuf);
+			snd_error(CORE, "Cannot open shared library %s (%s)",
+							 lib ? lib : "[builtin]",
+
+							 errbuf);
+
 		return NULL;
 	}
 
 	func = snd_dlsym(dlobj, name, version);
 	if (func == NULL) {
 		if (verbose)
-			SNDERR("symbol %s is not defined inside %s",
-					name, lib ? lib : "[builtin]");
+			snd_error(CORE, "symbol %s is not defined inside %s",
+						 name, lib ? lib : "[builtin]");
+
 		goto __err;
 	}
 	c = malloc(sizeof(*c));

@@ -19,13 +19,11 @@
  *
  */
 
-#include <stdio.h>
-#include <stdlib.h>
+#include "rawmidi_local.h"
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include "rawmidi_local.h"
 #include "seq.h"
 #include "seq_midi_event.h"
 
@@ -54,7 +52,7 @@ typedef struct {
 	int pending;
 } snd_rawmidi_virtual_t;
 
-int _snd_seq_open_lconf(snd_seq_t **seqp, const char *name, 
+int _snd_seq_open_lconf(snd_seq_t **seqp, const char *name,
 			int streams, int mode, snd_config_t *lconf,
 			snd_config_t *parent_conf);
 #endif
@@ -183,7 +181,7 @@ static int snd_rawmidi_virtual_drain(snd_rawmidi_t *rmidi)
 			virt->pending = 0;
 		}
 		snd_seq_drain_output(virt->handle);
-		snd_seq_sync_output_queue(virt->handle);
+		(void)snd_seq_sync_output_queue(virt->handle);
 	}
 	return snd_rawmidi_virtual_drop(rmidi);
 }

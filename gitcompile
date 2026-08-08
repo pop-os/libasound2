@@ -5,7 +5,6 @@ set -e
 bits32=
 cbits32=
 modules=
-alisp=
 lto=
 if [ $# -ne 0 ]; then
   endloop=
@@ -20,10 +19,6 @@ if [ $# -ne 0 ]; then
       modules=yes
       echo "Forced mixer modules build..."
       shift ;;
-    alisp)
-      alisp=yes
-      echo "Forced alisp code build..."
-      shift ;;
     python2)
       python2=yes
       echo "Forced python2 interpreter build..."
@@ -31,6 +26,10 @@ if [ $# -ne 0 ]; then
     lto)
       lto="-flto -flto-partition=none"
       echo "Forced lto build..."
+      shift ;;
+    static)
+      static=yes
+      echo "Selected static build..."
       shift ;;
     *)
       endloop=yes
@@ -67,13 +66,15 @@ if [ "$modules" = "yes" ]; then
   args="$args --enable-mixer-pymods"
 fi
 
-if [ "$alisp" = "yes" ]; then
-  args="$args --enable-alisp"
-fi
-
 if [ "$python2" = "yes" ]; then
   args="$args --enable-python2"
 fi
+
+if [ "$static" = "yes" ]; then
+  #args="$args --enable-shared=no --enable-static=yes"
+  args="$args --disable-shared"
+fi
+
 
 touch ltconfig
 libtoolize --force --copy --automake

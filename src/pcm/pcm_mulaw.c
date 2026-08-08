@@ -25,12 +25,11 @@
  *   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
-  
-#include "bswap.h"
+
 #include "pcm_local.h"
 #include "pcm_plugin.h"
-
 #include "plugin_ops.h"
+#include "bswap.h"
 
 #ifndef PIC
 /* entry for static linking */
@@ -252,6 +251,8 @@ static int snd_pcm_mulaw_hw_refine_cprepare(snd_pcm_t *pcm, snd_pcm_hw_params_t 
 		err = _snd_pcm_hw_params_set_format(params,
 						   SND_PCM_FORMAT_MU_LAW);
 	}
+	if (err < 0)
+		return err;
 	err = _snd_pcm_hw_params_set_subformat(params, SND_PCM_SUBFORMAT_STD);
 	if (err < 0)
 		return err;
@@ -288,7 +289,7 @@ static int snd_pcm_mulaw_hw_refine_schange(snd_pcm_t *pcm ATTRIBUTE_UNUSED, snd_
 		return err;
 	return 0;
 }
-	
+
 static int snd_pcm_mulaw_hw_refine_cchange(snd_pcm_t *pcm ATTRIBUTE_UNUSED, snd_pcm_hw_params_t *params,
 					    snd_pcm_hw_params_t *sparams)
 {
@@ -366,7 +367,7 @@ snd_pcm_mulaw_write_areas(snd_pcm_t *pcm,
 	if (size > *slave_sizep)
 		size = *slave_sizep;
 	mulaw->func(slave_areas, slave_offset,
-		    areas, offset, 
+		    areas, offset,
 		    pcm->channels, size,
 		    mulaw->getput_idx);
 	*slave_sizep = size;
@@ -385,7 +386,7 @@ snd_pcm_mulaw_read_areas(snd_pcm_t *pcm,
 	snd_pcm_mulaw_t *mulaw = pcm->private_data;
 	if (size > *slave_sizep)
 		size = *slave_sizep;
-	mulaw->func(areas, offset, 
+	mulaw->func(areas, offset,
 		    slave_areas, slave_offset,
 		    pcm->channels, size,
 		    mulaw->getput_idx);
@@ -396,7 +397,7 @@ snd_pcm_mulaw_read_areas(snd_pcm_t *pcm,
 static void snd_pcm_mulaw_dump(snd_pcm_t *pcm, snd_output_t *out)
 {
 	snd_pcm_mulaw_t *mulaw = pcm->private_data;
-	snd_output_printf(out, "Mu-Law conversion PCM (%s)\n", 
+	snd_output_printf(out, "Mu-Law conversion PCM (%s)\n",
 		snd_pcm_format_name(mulaw->sformat));
 	if (pcm->setup) {
 		snd_output_printf(out, "Its setup is:\n");
@@ -485,15 +486,15 @@ format and rate must match for both of them.
 
 \code
 pcm.name {
-        type mulaw              # Mu-Law conversion PCM
-        slave STR               # Slave name
-        # or
-        slave {                 # Slave definition
-                pcm STR         # Slave PCM name
-                # or
-                pcm { }         # Slave PCM definition
-                format STR      # Slave format
-        }
+	type mulaw              # Mu-Law conversion PCM
+	slave STR               # Slave name
+	# or
+	slave {                 # Slave definition
+		pcm STR         # Slave PCM name
+		# or
+		pcm { }         # Slave PCM definition
+		format STR      # Slave format
+	}
 }
 \endcode
 
@@ -520,7 +521,7 @@ pcm.name {
  *          changed in future.
  */
 int _snd_pcm_mulaw_open(snd_pcm_t **pcmp, const char *name,
-			snd_config_t *root, snd_config_t *conf, 
+			snd_config_t *root, snd_config_t *conf,
 			snd_pcm_stream_t stream, int mode)
 {
 	snd_config_iterator_t i, next;
@@ -539,11 +540,11 @@ int _snd_pcm_mulaw_open(snd_pcm_t **pcmp, const char *name,
 			slave = n;
 			continue;
 		}
-		SNDERR("Unknown field %s", id);
+		snd_error(PCM, "Unknown field %s", id);
 		return -EINVAL;
 	}
 	if (!slave) {
-		SNDERR("slave is not defined");
+		snd_error(PCM, "slave is not defined");
 		return -EINVAL;
 	}
 	err = snd_pcm_slave_conf(root, slave, &sconf, 1,
@@ -553,7 +554,7 @@ int _snd_pcm_mulaw_open(snd_pcm_t **pcmp, const char *name,
 	if (snd_pcm_format_linear(sformat) != 1 &&
 	    sformat != SND_PCM_FORMAT_MU_LAW) {
 		snd_config_delete(sconf);
-		SNDERR("invalid slave format");
+		snd_error(PCM, "invalid slave format");
 		return -EINVAL;
 	}
 	err = snd_pcm_open_slave(&spcm, root, sconf, stream, mode, conf);

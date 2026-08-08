@@ -25,8 +25,14 @@
  *
  */
 
+#if !defined(__ASOUNDLIB_H) && !defined(ALSA_LIBRARY_BUILD)
+/* don't use ALSA_LIBRARY_BUILD define in sources outside alsa-lib */
+#warning "use #include <alsa/asoundlib.h>, <alsa/rawmidi.h> should not be used directly"
+#include <alsa/asoundlib.h>
+#endif
+
 #ifndef __ALSA_RAWMIDI_H
-#define __ALSA_RAWMIDI_H
+#define __ALSA_RAWMIDI_H /**< header include loop protection */
 
 #ifdef __cplusplus
 extern "C" {
@@ -93,6 +99,13 @@ typedef enum _snd_rawmidi_read_mode {
 	SND_RAWMIDI_READ_TSTAMP = 1,
 } snd_rawmidi_read_mode_t;
 
+/** rawmidi info bit flags */
+#define SND_RAWMIDI_INFO_UMP			0x00000008	/**< rawmidi is UMP */
+#define SND_RAWMIDI_INFO_STREAM_INACTIVE	0x00000010	/**< the selected substream is inactive */
+#ifndef SNDRV_RAWMIDI_INFO_STREAM_INACTIVE
+#define SNDRV_RAWMIDI_INFO_STREAM_INACTIVE	SND_RAWMIDI_INFO_STREAM_INACTIVE /**< compatibility alias for SND_RAWMIDI_INFO_STREAM_INACTIVE */
+#endif
+
 int snd_rawmidi_open(snd_rawmidi_t **in_rmidi, snd_rawmidi_t **out_rmidi,
 		     const char *name, int mode);
 int snd_rawmidi_open_lconf(snd_rawmidi_t **in_rmidi, snd_rawmidi_t **out_rmidi,
@@ -121,6 +134,7 @@ const char *snd_rawmidi_info_get_name(const snd_rawmidi_info_t *obj);
 const char *snd_rawmidi_info_get_subdevice_name(const snd_rawmidi_info_t *obj);
 unsigned int snd_rawmidi_info_get_subdevices_count(const snd_rawmidi_info_t *obj);
 unsigned int snd_rawmidi_info_get_subdevices_avail(const snd_rawmidi_info_t *obj);
+int snd_rawmidi_info_get_tied_device(const snd_rawmidi_info_t *obj);
 void snd_rawmidi_info_set_device(snd_rawmidi_info_t *obj, unsigned int val);
 void snd_rawmidi_info_set_subdevice(snd_rawmidi_info_t *obj, unsigned int val);
 void snd_rawmidi_info_set_stream(snd_rawmidi_info_t *obj, snd_rawmidi_stream_t val);

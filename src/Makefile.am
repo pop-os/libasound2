@@ -1,10 +1,12 @@
-EXTRA_DIST=Versions
+EXTRA_DIST = Versions.in.in
 COMPATNUM=@LIBTOOL_VERSION_INFO@
 
 if VERSIONED_SYMBOLS
 VSYMS = -Wl,--version-script=Versions
+BUILT_SOURCES = $(top_builddir)/src/Versions
 else
 VSYMS =
+BUILT_SOURCES =
 endif
 
 if SYMBOLIC_FUNCTIONS
@@ -12,6 +14,8 @@ SYMFUNCS = -Wl,-Bsymbolic-functions
 else
 SYMFUNCS =
 endif
+
+VERSION_CPPFLAGS =
 
 lib_LTLIBRARIES = libasound.la
 libasound_la_SOURCES = conf.c confeval.c confmisc.c input.c output.c async.c error.c dlmisc.c socket.c shmarea.c userfile.c names.c
@@ -23,12 +27,16 @@ SUBDIRS += mixer
 libasound_la_LIBADD += mixer/libmixer.la
 endif
 if BUILD_PCM
+if VERSIONED_SYMBOLS
+VERSION_CPPFLAGS += -DHAVE_PCM_SYMS -DHAVE_TIMER_SYMS
+endif
 SUBDIRS += pcm timer
 libasound_la_LIBADD += pcm/libpcm.la timer/libtimer.la
 endif
 if BUILD_RAWMIDI
 SUBDIRS += rawmidi
 libasound_la_LIBADD += rawmidi/librawmidi.la
+VERSION_CPPFLAGS += -DHAVE_RAWMIDI_SYMS
 endif
 if BUILD_HWDEP
 SUBDIRS += hwdep
@@ -37,19 +45,19 @@ endif
 if BUILD_SEQ
 SUBDIRS += seq
 libasound_la_LIBADD += seq/libseq.la
+VERSION_CPPFLAGS += -DHAVE_SEQ_SYMS
 endif
 if BUILD_UCM
 SUBDIRS += ucm
 libasound_la_LIBADD += ucm/libucm.la
 endif
-if BUILD_ALISP
-SUBDIRS += alisp
-libasound_la_LIBADD += alisp/libalisp.la
-endif
 SUBDIRS += conf
 libasound_la_LIBADD += @ALSA_DEPLIBS@
 
 libasound_la_LDFLAGS = -version-info $(COMPATNUM) $(VSYMS) $(SYMFUNCS) $(LDFLAGS_NOUNDEFINED)
+
+$(top_builddir)/src/Versions: $(top_builddir)/src/Versions.in
+	$(COMPILE) -E $(VERSION_CPPFLAGS) -x assembler-with-cpp -o $@ $<
 
 control/libcontrol.la:
 	$(MAKE) -C control libcontrol.la
@@ -86,8 +94,5 @@ topology/libtopology.la:
 
 instr/libinstr.la:
 	$(MAKE) -C instr libinstr.la
-
-alisp/libalisp.la:
-	$(MAKE) -C alisp libalisp.la
 
 AM_CPPFLAGS=-I$(top_srcdir)/include

@@ -30,12 +30,12 @@
  *
  */
 
+#include "local.h"
 #include <stdarg.h>
 #include <limits.h>
 #include <sys/stat.h>
-#include "local.h"
 
-/** 
+/**
  * \brief This function is unimplemented.
  * \deprecated Since 1.0.14
  */

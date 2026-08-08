@@ -13,11 +13,10 @@
   GNU Lesser General Public License for more details.
 
   Authors: Mengdong Lin <mengdong.lin@intel.com>
-           Yao Jin <yao.jin@intel.com>
-           Liam Girdwood <liam.r.girdwood@linux.intel.com>
+	   Yao Jin <yao.jin@intel.com>
+	   Liam Girdwood <liam.r.girdwood@linux.intel.com>
 */
 
-#include "list.h"
 #include "tplg_local.h"
 
 #define RATE(v) [SND_PCM_RATE_##v] = #v
@@ -26,16 +25,23 @@ static const char *const snd_pcm_rate_names[] = {
 	RATE(5512),
 	RATE(8000),
 	RATE(11025),
+	RATE(12000),
 	RATE(16000),
 	RATE(22050),
+	RATE(24000),
 	RATE(32000),
 	RATE(44100),
 	RATE(48000),
 	RATE(64000),
 	RATE(88200),
 	RATE(96000),
+	RATE(128000),
 	RATE(176400),
 	RATE(192000),
+	RATE(352800),
+	RATE(384000),
+	RATE(705600),
+	RATE(768000),
 	RATE(CONTINUOUS),
 	RATE(KNOT),
 };
@@ -116,8 +122,9 @@ static int build_pcm(snd_tplg_t *tplg, struct tplg_elem *elem)
 				return err;
 		}
 		if (!ref->elem) {
-			SNDERR("cannot find '%s' referenced by"
-				" PCM '%s'", ref->id, elem->id);
+			snd_error(TOPOLOGY, "cannot find '%s' referenced by"
+					    " PCM '%s'", ref->id, elem->id);
+
 			return -EINVAL;
 		}
 	}
@@ -137,7 +144,7 @@ int tplg_build_pcms(snd_tplg_t *tplg, unsigned int type)
 
 		elem = list_entry(pos, struct tplg_elem, list);
 		if (elem->type != type) {
-			SNDERR("invalid elem '%s'", elem->id);
+			snd_error(TOPOLOGY, "invalid elem '%s'", elem->id);
 			return -EINVAL;
 		}
 
@@ -196,7 +203,7 @@ int tplg_build_dais(snd_tplg_t *tplg, unsigned int type)
 
 		elem = list_entry(pos, struct tplg_elem, list);
 		if (elem->type != type) {
-			SNDERR("invalid elem '%s'", elem->id);
+			snd_error(TOPOLOGY, "invalid elem '%s'", elem->id);
 			return -EINVAL;
 		}
 
@@ -251,9 +258,10 @@ static int build_link(snd_tplg_t *tplg, struct tplg_elem *elem)
 			ref->elem = tplg_elem_lookup(&tplg->hw_cfg_list,
 				ref->id, SND_TPLG_TYPE_HW_CONFIG, elem->index);
 			if (!ref->elem) {
-				SNDERR("cannot find HW config '%s'"
-				       " referenced by link '%s'",
-				       ref->id, elem->id);
+				snd_error(TOPOLOGY, "cannot find HW config '%s'"
+						    " referenced by link '%s'",
+						    ref->id, elem->id);
+
 				return -EINVAL;
 			}
 
@@ -321,7 +329,7 @@ static int split_format(struct snd_soc_tplg_stream_caps *caps, char *str)
 	while ((s != NULL) && (i < SND_SOC_TPLG_MAX_FORMATS)) {
 		format = snd_pcm_format_value(s);
 		if (format == SND_PCM_FORMAT_UNKNOWN) {
-			SNDERR("unsupported stream format %s", s);
+			snd_error(TOPOLOGY, "unsupported stream format %s", s);
 			return -EINVAL;
 		}
 
@@ -364,7 +372,7 @@ static int split_rate(struct snd_soc_tplg_stream_caps *caps, char *str)
 		rate = get_rate_value(s);
 
 		if (rate == SND_PCM_RATE_UNKNOWN) {
-			SNDERR("unsupported stream rate %s", s);
+			snd_error(TOPOLOGY, "unsupported stream rate %s", s);
 			return -EINVAL;
 		}
 
@@ -626,7 +634,8 @@ static int tplg_parse_streams(snd_tplg_t *tplg ATTRIBUTE_UNUSED,
 	const char *id, *value;
 	int stream;
 
-	snd_config_get_id(cfg, &id);
+	if (snd_config_get_id(cfg, &id) < 0)
+		return -EINVAL;
 
 	tplg_dbg("\t%s:", id);
 
@@ -749,7 +758,8 @@ static int tplg_parse_fe_dai(snd_tplg_t *tplg ATTRIBUTE_UNUSED,
 	const char *id;
 	unsigned int dai_id;
 
-	snd_config_get_id(cfg, &id);
+	if (snd_config_get_id(cfg, &id) < 0)
+		return -EINVAL;
 	tplg_dbg("\t\tFE DAI %s:", id);
 	snd_strlcpy(pcm->dai_name, id, SNDRV_CTL_ELEM_ID_NAME_MAXLEN);
 
@@ -763,7 +773,7 @@ static int tplg_parse_fe_dai(snd_tplg_t *tplg ATTRIBUTE_UNUSED,
 
 		if (strcmp(id, "id") == 0) {
 			if (tplg_get_unsigned(n, &dai_id, 0)) {
-				SNDERR("invalid fe dai ID");
+				snd_error(TOPOLOGY, "invalid fe dai ID");
 				return -EINVAL;
 			}
 
@@ -812,15 +822,17 @@ static int parse_flag(snd_config_t *n, unsigned int mask_in,
 static int save_flags(unsigned int flags, unsigned int mask,
 		      struct tplg_buf *dst, const char *pfx)
 {
-	static unsigned int flag_masks[3] = {
+	static unsigned int flag_masks[4] = {
 		SND_SOC_TPLG_LNK_FLGBIT_SYMMETRIC_RATES,
 		SND_SOC_TPLG_LNK_FLGBIT_SYMMETRIC_CHANNELS,
 		SND_SOC_TPLG_LNK_FLGBIT_SYMMETRIC_SAMPLEBITS,
+		SND_SOC_TPLG_LNK_FLGBIT_VOICE_WAKEUP,
 	};
-	static const char *flag_ids[3] = {
+	static const char *flag_ids[4] = {
 		"symmetric_rates",
 		"symmetric_channels",
 		"symmetric_sample_bits",
+		"ignore_suspend",
 	};
 	unsigned int i;
 	int err = 0;
@@ -923,6 +935,15 @@ int tplg_parse_pcm(snd_tplg_t *tplg, snd_config_t *cfg,
 		if (strcmp(id, "symmetric_sample_bits") == 0) {
 			err = parse_flag(n,
 				SND_SOC_TPLG_LNK_FLGBIT_SYMMETRIC_SAMPLEBITS,
+				&pcm->flag_mask, &pcm->flags);
+			if (err < 0)
+				return err;
+			continue;
+		}
+
+		if (strcmp(id, "ignore_suspend") == 0) {
+			err = parse_flag(n,
+				SND_SOC_TPLG_LNK_FLGBIT_VOICE_WAKEUP,
 				&pcm->flag_mask, &pcm->flags);
 			if (err < 0)
 				return err;
@@ -1060,6 +1081,15 @@ int tplg_parse_dai(snd_tplg_t *tplg, snd_config_t *cfg,
 		if (strcmp(id, "symmetric_sample_bits") == 0) {
 			err = parse_flag(n,
 				SND_SOC_TPLG_DAI_FLGBIT_SYMMETRIC_SAMPLEBITS,
+				&dai->flag_mask, &dai->flags);
+			if (err < 0)
+				return err;
+			continue;
+		}
+
+		if (strcmp(id, "ignore_suspend") == 0) {
+			err = parse_flag(n,
+				SND_SOC_TPLG_LNK_FLGBIT_VOICE_WAKEUP,
 				&dai->flag_mask, &dai->flags);
 			if (err < 0)
 				return err;
@@ -1220,6 +1250,15 @@ int tplg_parse_link(snd_tplg_t *tplg, snd_config_t *cfg,
 			continue;
 		}
 
+		if (strcmp(id, "ignore_suspend") == 0) {
+			err = parse_flag(n,
+				SND_SOC_TPLG_LNK_FLGBIT_VOICE_WAKEUP,
+				&link->flag_mask, &link->flags);
+			if (err < 0)
+				return err;
+			continue;
+		}
+
 		/* private data */
 		if (strcmp(id, "data") == 0) {
 			err = tplg_parse_refs(n, elem, SND_TPLG_TYPE_DATA);
@@ -1336,10 +1375,12 @@ int tplg_save_cc(snd_tplg_t *tplg ATTRIBUTE_UNUSED,
 	return err;
 }
 
+#ifndef DOC_HIDDEN
 struct audio_hw_format {
 	unsigned int type;
 	const char *name;
 };
+#endif /* DOC_HIDDEN */
 
 static struct audio_hw_format audio_hw_formats[] = {
 	{
@@ -1383,7 +1424,7 @@ static int get_audio_hw_format(const char *val)
 		if (strcasecmp(audio_hw_formats[i].name, val) == 0)
 			return audio_hw_formats[i].type;
 
-	SNDERR("invalid audio HW format %s", val);
+	snd_error(TOPOLOGY, "invalid audio HW format %s", val);
 	return -EINVAL;
 }
 
@@ -1450,7 +1491,7 @@ int tplg_parse_hw_config(snd_tplg_t *tplg, snd_config_t *cfg,
 
 		provider_legacy = false;
 		if (strcmp(id, "bclk_master") == 0) {
-			SNDERR("deprecated option %s, please use 'bclk'\n", id);
+			snd_error(TOPOLOGY, "deprecated option %s, please use 'bclk'", id);
 			provider_legacy = true;
 		}
 
@@ -1464,17 +1505,17 @@ int tplg_parse_hw_config(snd_tplg_t *tplg, snd_config_t *cfg,
 				/* For backwards capability,
 				 * "master" == "codec is slave"
 				 */
-				SNDERR("deprecated bclk value '%s'", val);
+				snd_error(TOPOLOGY, "deprecated bclk value '%s'", val);
 
 				hw_cfg->bclk_provider = SND_SOC_TPLG_BCLK_CC;
 			} else if (!strcmp(val, "codec_slave")) {
-				SNDERR("deprecated bclk value '%s', use 'codec_consumer'", val);
+				snd_error(TOPOLOGY, "deprecated bclk value '%s', use 'codec_consumer'", val);
 
 				hw_cfg->bclk_provider = SND_SOC_TPLG_BCLK_CC;
 			} else if (!strcmp(val, "codec_consumer")) {
 				hw_cfg->bclk_provider = SND_SOC_TPLG_BCLK_CC;
 			} else if (!strcmp(val, "codec_master")) {
-				SNDERR("deprecated bclk value '%s', use 'codec_provider", val);
+				snd_error(TOPOLOGY, "deprecated bclk value '%s', use 'codec_provider", val);
 
 				hw_cfg->bclk_provider = SND_SOC_TPLG_BCLK_CP;
 			} else if (!strcmp(val, "codec_provider")) {
@@ -1502,7 +1543,7 @@ int tplg_parse_hw_config(snd_tplg_t *tplg, snd_config_t *cfg,
 
 		provider_legacy = false;
 		if (strcmp(id, "fsync_master") == 0) {
-			SNDERR("deprecated option %s, please use 'fsync'\n", id);
+			snd_error(TOPOLOGY, "deprecated option %s, please use 'fsync'", id);
 			provider_legacy = true;
 		}
 
@@ -1516,17 +1557,17 @@ int tplg_parse_hw_config(snd_tplg_t *tplg, snd_config_t *cfg,
 				/* For backwards capability,
 				 * "master" == "codec is slave"
 				 */
-				SNDERR("deprecated fsync value '%s'", val);
+				snd_error(TOPOLOGY, "deprecated fsync value '%s'", val);
 
 				hw_cfg->fsync_provider = SND_SOC_TPLG_FSYNC_CC;
 			} else if (!strcmp(val, "codec_slave")) {
-				SNDERR("deprecated fsync value '%s', use 'codec_consumer'", val);
+				snd_error(TOPOLOGY, "deprecated fsync value '%s', use 'codec_consumer'", val);
 
 				hw_cfg->fsync_provider = SND_SOC_TPLG_FSYNC_CC;
 			} else if (!strcmp(val, "codec_consumer")) {
 				hw_cfg->fsync_provider = SND_SOC_TPLG_FSYNC_CC;
 			} else if (!strcmp(val, "codec_master")) {
-				SNDERR("deprecated fsync value '%s', use 'codec_provider'", val);
+				snd_error(TOPOLOGY, "deprecated fsync value '%s', use 'codec_provider'", val);
 
 				hw_cfg->fsync_provider = SND_SOC_TPLG_FSYNC_CP;
 			} else if (!strcmp(val, "codec_provider")) {
@@ -1568,7 +1609,7 @@ int tplg_parse_hw_config(snd_tplg_t *tplg, snd_config_t *cfg,
 				/* For backwards capability,
 				 * "master" == "for codec, mclk is input"
 				 */
-				SNDERR("deprecated mclk value '%s'", val);
+				snd_error(TOPOLOGY, "deprecated mclk value '%s'", val);
 
 				hw_cfg->mclk_direction = SND_SOC_TPLG_MCLK_CI;
 			} else if (!strcmp(val, "codec_mclk_in")) {
@@ -1986,20 +2027,21 @@ next:
 	pcm = bin;
 
 	if (size < sizeof(*pcm)) {
-		SNDERR("pcm: small size %d", size);
+		snd_error(TOPOLOGY, "pcm: small size %d", size);
 		return -EINVAL;
 	}
 	if (sizeof(*pcm) != pcm->size) {
-		SNDERR("pcm: unknown element size %d (expected %zd)",
-		       pcm->size, sizeof(*pcm));
+		snd_error(TOPOLOGY, "pcm: unknown element size %d (expected %zd)",
+			       pcm->size, sizeof(*pcm));
+
 		return -EINVAL;
 	}
 	if (pcm->num_streams > SND_SOC_TPLG_STREAM_CONFIG_MAX) {
-		SNDERR("pcm: wrong number of streams %d", pcm->num_streams);
+		snd_error(TOPOLOGY, "pcm: wrong number of streams %d", pcm->num_streams);
 		return -EINVAL;
 	}
 	if (sizeof(*pcm) + pcm->priv.size > size) {
-		SNDERR("pcm: wrong private data size %d", pcm->priv.size);
+		snd_error(TOPOLOGY, "pcm: wrong private data size %d", pcm->priv.size);
 		return -EINVAL;
 	}
 
@@ -2024,8 +2066,9 @@ next:
 	for (i = 0; i < pcm->num_streams; i++) {
 		stream = &pt->stream[i];
 		if (pcm->stream[i].size != sizeof(pcm->stream[0])) {
-			SNDERR("pcm: unknown stream structure size %d",
-			       pcm->stream[i].size);
+			snd_error(TOPOLOGY, "pcm: unknown stream structure size %d",
+					    pcm->stream[i].size);
+
 			return -EINVAL;
 		}
 		stream->name = pcm->stream[i].name;
@@ -2045,8 +2088,9 @@ next:
 		cap = &caps[i];
 		pt->caps[i] = cap;
 		if (pcm->caps[i].size != sizeof(pcm->caps[0])) {
-			SNDERR("pcm: unknown caps structure size %d",
-			       pcm->caps[i].size);
+			snd_error(TOPOLOGY, "pcm: unknown caps structure size %d",
+					    pcm->caps[i].size);
+
 			return -EINVAL;
 		}
 		cap->name = pcm->caps[i].name;
@@ -2093,7 +2137,7 @@ int tplg_decode_dai(snd_tplg_t *tplg ATTRIBUTE_UNUSED,
 		    void *bin ATTRIBUTE_UNUSED,
 		    size_t size ATTRIBUTE_UNUSED)
 {
-	SNDERR("not implemented");
+	snd_error(TOPOLOGY, "not implemented");
 	return -ENXIO;
 }
 
@@ -2104,7 +2148,7 @@ int tplg_decode_cc(snd_tplg_t *tplg ATTRIBUTE_UNUSED,
 		   void *bin ATTRIBUTE_UNUSED,
 		   size_t size ATTRIBUTE_UNUSED)
 {
-	SNDERR("not implemented");
+	snd_error(TOPOLOGY, "not implemented");
 	return -ENXIO;
 }
 
@@ -2135,24 +2179,25 @@ next:
 	link = bin;
 
 	if (size < sizeof(*link)) {
-		SNDERR("link: small size %d", size);
+		snd_error(TOPOLOGY, "link: small size %d", size);
 		return -EINVAL;
 	}
 	if (sizeof(*link) != link->size) {
-		SNDERR("link: unknown element size %d (expected %zd)",
-		       link->size, sizeof(*link));
+		snd_error(TOPOLOGY, "link: unknown element size %d (expected %zd)",
+				    link->size, sizeof(*link));
+
 		return -EINVAL;
 	}
 	if (link->num_streams > SND_SOC_TPLG_STREAM_CONFIG_MAX) {
-		SNDERR("link: wrong number of streams %d", link->num_streams);
+		snd_error(TOPOLOGY, "link: wrong number of streams %d", link->num_streams);
 		return -EINVAL;
 	}
 	if (link->num_hw_configs > SND_SOC_TPLG_HW_CONFIG_MAX) {
-		SNDERR("link: wrong number of streams %d", link->num_streams);
+		snd_error(TOPOLOGY, "link: wrong number of streams %d", link->num_streams);
 		return -EINVAL;
 	}
 	if (sizeof(*link) + link->priv.size > size) {
-		SNDERR("link: wrong private data size %d", link->priv.size);
+		snd_error(TOPOLOGY, "link: wrong private data size %d", link->priv.size);
 		return -EINVAL;
 	}
 
@@ -2174,8 +2219,9 @@ next:
 	for (i = 0; i < link->num_streams; i++) {
 		stream = &streams[i];
 		if (link->stream[i].size != sizeof(link->stream[0])) {
-			SNDERR("link: unknown stream structure size %d",
-			       link->stream[i].size);
+			snd_error(TOPOLOGY, "link: unknown stream structure size %d",
+					    link->stream[i].size);
+
 			return -EINVAL;
 		}
 		stream->name = link->stream[i].name;
@@ -2192,8 +2238,9 @@ next:
 	for (i = 0; i < link->num_hw_configs; i++) {
 		hw = &hws[i];
 		if (link->hw_config[i].size != sizeof(link->hw_config[0])) {
-			SNDERR("link: unknown hw_config structure size %d",
-			       link->hw_config[i].size);
+			snd_error(TOPOLOGY, "link: unknown hw_config structure size %d",
+				       link->hw_config[i].size);
+
 			return -EINVAL;
 		}
 		hw->id = link->hw_config[i].id;
@@ -2213,14 +2260,14 @@ next:
 		hw->rx_slots = link->hw_config[i].rx_slots;
 		hw->tx_channels = link->hw_config[i].tx_channels;
 		if (hw->tx_channels > SND_SOC_TPLG_MAX_CHAN) {
-			SNDERR("link: wrong tx channels %d", hw->tx_channels);
+			snd_error(TOPOLOGY, "link: wrong tx channels %d", hw->tx_channels);
 			return -EINVAL;
 		}
 		for (j = 0; j < hw->tx_channels; j++)
 			hw->tx_chanmap[j] = link->hw_config[i].tx_chanmap[j];
 		hw->rx_channels = link->hw_config[i].rx_channels;
 		if (hw->rx_channels > SND_SOC_TPLG_MAX_CHAN) {
-			SNDERR("link: wrong rx channels %d", hw->tx_channels);
+			snd_error(TOPOLOGY, "link: wrong rx channels %d", hw->tx_channels);
 			return -EINVAL;
 		}
 		for (j = 0; j < hw->rx_channels; j++)

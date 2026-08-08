@@ -25,18 +25,20 @@
  *   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
-  
 
+
+#include "pcm_local.h"
+#include "pcm_plugin.h"
 #include "bswap.h"
 #include <time.h>
 #include <pthread.h>
 #include <dlfcn.h>
-#include "pcm_local.h"
-#include "pcm_plugin.h"
 
+#ifndef DOC_HIDDEN
 #define atomic_read(ptr)    __atomic_load_n(ptr, __ATOMIC_SEQ_CST )
 #define atomic_add(ptr, n)  __atomic_add_fetch(ptr, n, __ATOMIC_SEQ_CST)
 #define atomic_dec(ptr)     __atomic_sub_fetch(ptr, 1, __ATOMIC_SEQ_CST)
+#endif
 
 #ifndef PIC
 /* entry for static linking */
@@ -91,7 +93,7 @@ static void snd_pcm_meter_add_frames(snd_pcm_t *pcm,
 			n = dst_cont;
 		if (n > src_cont)
 			n = src_cont;
-		snd_pcm_areas_copy(meter->buf_areas, dst_offset, 
+		snd_pcm_areas_copy(meter->buf_areas, dst_offset,
 				   areas, src_offset,
 				   pcm->channels, n, pcm->format);
 		frames -= n;
@@ -257,7 +259,7 @@ static void *snd_pcm_meter_thread(void *data)
 			if (scope->enabled)
 				scope->ops->update(scope);
 		}
-	        nanosleep(&meter->delay, NULL);
+		nanosleep(&meter->delay, NULL);
 	}
 	list_for_each(pos, &meter->scopes) {
 		scope = list_entry(pos, snd_pcm_scope_t, list);
@@ -402,7 +404,7 @@ static int snd_pcm_meter_hw_refine_schange(snd_pcm_t *pcm ATTRIBUTE_UNUSED, snd_
 		return err;
 	return 0;
 }
-	
+
 static int snd_pcm_meter_hw_refine_cchange(snd_pcm_t *pcm ATTRIBUTE_UNUSED, snd_pcm_hw_params_t *params,
 					  snd_pcm_hw_params_t *sparams)
 {
@@ -441,7 +443,7 @@ static int snd_pcm_meter_hw_params(snd_pcm_t *pcm, snd_pcm_hw_params_t * params)
 	snd_pcm_meter_t *meter = pcm->private_data;
 	unsigned int channel;
 	snd_pcm_t *slave = meter->gen.slave;
-	size_t buf_size_bytes;
+	ssize_t buf_size_bytes;
 	int err;
 	err = snd_pcm_hw_params_slave(pcm, params,
 				      snd_pcm_meter_hw_refine_cchange,
@@ -455,6 +457,8 @@ static int snd_pcm_meter_hw_params(snd_pcm_t *pcm, snd_pcm_hw_params_t * params)
 	while (meter->buf_size < slave->rate)
 		meter->buf_size *= 2;
 	buf_size_bytes = snd_pcm_frames_to_bytes(slave, meter->buf_size);
+	if (buf_size_bytes < 0)
+		return buf_size_bytes;
 	assert(!meter->buf);
 	meter->buf = malloc(buf_size_bytes);
 	if (!meter->buf)
@@ -619,23 +623,23 @@ static int snd_pcm_meter_add_scope_conf(snd_pcm_t *pcm, const char *name,
 	int err;
 
 	if (snd_config_get_type(conf) != SND_CONFIG_TYPE_COMPOUND) {
-		SNDERR("Invalid type for scope %s", str);
+		snd_error(PCM, "Invalid type for scope %s", str);
 		err = -EINVAL;
 		goto _err;
 	}
 	err = snd_config_search(conf, "type", &c);
 	if (err < 0) {
-		SNDERR("type is not defined");
+		snd_error(PCM, "type is not defined");
 		goto _err;
 	}
 	err = snd_config_get_id(c, &id);
 	if (err < 0) {
-		SNDERR("unable to get id");
+		snd_error(PCM, "unable to get id");
 		goto _err;
 	}
 	err = snd_config_get_string(c, &str);
 	if (err < 0) {
-		SNDERR("Invalid type for %s", id);
+		snd_error(PCM, "Invalid type for %s", id);
 		goto _err;
 	}
 	err = snd_config_search_definition(root, "pcm_scope_type", str, &type_conf);
@@ -650,7 +654,7 @@ static int snd_pcm_meter_add_scope_conf(snd_pcm_t *pcm, const char *name,
 			if (strcmp(id, "lib") == 0) {
 				err = snd_config_get_string(n, &lib);
 				if (err < 0) {
-					SNDERR("Invalid type for %s", id);
+					snd_error(PCM, "Invalid type for %s", id);
 					goto _err;
 				}
 				continue;
@@ -658,12 +662,12 @@ static int snd_pcm_meter_add_scope_conf(snd_pcm_t *pcm, const char *name,
 			if (strcmp(id, "open") == 0) {
 				err = snd_config_get_string(n, &open_name);
 				if (err < 0) {
-					SNDERR("Invalid type for %s", id);
+					snd_error(PCM, "Invalid type for %s", id);
 					goto _err;
 				}
 				continue;
 			}
-			SNDERR("Unknown field %s", id);
+			snd_error(PCM, "Unknown field %s", id);
 			err = -EINVAL;
 			goto _err;
 		}
@@ -676,10 +680,10 @@ static int snd_pcm_meter_add_scope_conf(snd_pcm_t *pcm, const char *name,
 	open_func = h ? dlsym(h, open_name) : NULL;
 	err = 0;
 	if (!h) {
-		SNDERR("Cannot open shared library %s (%s)", lib, errbuf);
+		snd_error(PCM, "Cannot open shared library %s (%s)", lib, errbuf);
 		err = -ENOENT;
 	} else if (!open_func) {
-		SNDERR("symbol %s is not defined inside %s", open_name, lib);
+		snd_error(PCM, "symbol %s is not defined inside %s", open_name, lib);
 		snd_dlclose(h);
 		err = -ENXIO;
 	}
@@ -714,14 +718,14 @@ pcm_scope.name {
 }
 
 pcm.name {
-        type meter              # Meter PCM
-        slave STR               # Slave name
-        # or
-        slave {                 # Slave definition
-                pcm STR         # Slave PCM name
-                # or
-                pcm { }         # Slave PCM definition
-        }
+	type meter              # Meter PCM
+	slave STR               # Slave name
+	# or
+	slave {                 # Slave definition
+		pcm STR         # Slave PCM name
+		# or
+		pcm { }         # Slave PCM definition
+	}
 	[frequency INT]		# Updates per second
 	scopes {
 		ID STR		# Scope name (see pcm_scope)
@@ -754,7 +758,7 @@ pcm.name {
  *          changed in future.
  */
 int _snd_pcm_meter_open(snd_pcm_t **pcmp, const char *name,
-			snd_config_t *root, snd_config_t *conf, 
+			snd_config_t *root, snd_config_t *conf,
 			snd_pcm_stream_t stream, int mode)
 {
 	snd_config_iterator_t i, next;
@@ -777,24 +781,24 @@ int _snd_pcm_meter_open(snd_pcm_t **pcmp, const char *name,
 		if (strcmp(id, "frequency") == 0) {
 			err = snd_config_get_integer(n, &frequency);
 			if (err < 0) {
-				SNDERR("Invalid type for %s", id);
+				snd_error(PCM, "Invalid type for %s", id);
 				return -EINVAL;
 			}
 			continue;
 		}
 		if (strcmp(id, "scopes") == 0) {
 			if (snd_config_get_type(n) != SND_CONFIG_TYPE_COMPOUND) {
-				SNDERR("Invalid type for %s", id);
+				snd_error(PCM, "Invalid type for %s", id);
 				return -EINVAL;
 			}
 			scopes = n;
 			continue;
 		}
-		SNDERR("Unknown field %s", id);
+		snd_error(PCM, "Unknown field %s", id);
 		return -EINVAL;
 	}
 	if (!slave) {
-		SNDERR("slave is not defined");
+		snd_error(PCM, "slave is not defined");
 		return -EINVAL;
 	}
 	err = snd_pcm_slave_conf(root, slave, &sconf, 0);
@@ -819,7 +823,7 @@ int _snd_pcm_meter_open(snd_pcm_t **pcmp, const char *name,
 		if (snd_config_get_string(n, &str) >= 0) {
 			err = snd_config_search_definition(root, "pcm_scope", str, &n);
 			if (err < 0) {
-				SNDERR("unknown pcm_scope %s", str);
+				snd_error(PCM, "unknown pcm_scope %s", str);
 			} else {
 				err = snd_pcm_meter_add_scope_conf(*pcmp, id, root, n);
 				snd_config_delete(n);
@@ -1172,7 +1176,7 @@ static const snd_pcm_scope_ops_t s16_ops = {
  * \param scopep Pointer to newly created and added scope
  * \return 0 on success otherwise a negative error code
  *
- * s16 pseudo scope convert #SND_PCM_TYPE_METER PCM frames in CPU endian 
+ * s16 pseudo scope convert #SND_PCM_TYPE_METER PCM frames in CPU endian
  * 16 bit frames for use with other scopes. Don't forget to insert it before
  * and to not insert it more time (see #snd_pcm_meter_search_scope)
  */

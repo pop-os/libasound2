@@ -43,7 +43,7 @@
 #undef LOCK_PREFIX
 #undef XADD
 #undef XSUB
- 
+
 #define MIX_AREAS_16 remix_areas_16_smp
 #define MIX_AREAS_32 remix_areas_32_smp
 #define MIX_AREAS_24 remix_areas_24_smp
@@ -57,7 +57,7 @@
 #undef LOCK_PREFIX
 #undef XADD
 #undef XSUB
- 
+
 #define x86_64_dmix_supported_format \
 	((1ULL << SND_PCM_FORMAT_S16_LE) |\
 	 (1ULL << SND_PCM_FORMAT_S32_LE) |\
@@ -69,13 +69,19 @@
 static void mix_select_callbacks(snd_pcm_direct_t *dmix)
 {
 	static int smp = 0;
-	
+	unsigned int format = dmix->shmptr->s.format;
+
 	if (!dmix->direct_memory_access) {
 		generic_mix_select_callbacks(dmix);
 		return;
 	}
 
-	if (!((1ULL<< dmix->shmptr->s.format) & x86_64_dmix_supported_format)) {
+	if (format > 31) {
+		generic_mix_select_callbacks(dmix);
+		return;
+	}
+
+	if (!((1U << format) & x86_64_dmix_supported_format)) {
 		generic_mix_select_callbacks(dmix);
 		return;
 	}

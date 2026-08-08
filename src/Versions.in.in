@@ -16,6 +16,7 @@ ALSA_0.9 {
 };
 
 ALSA_0.9.0rc4 {
+#ifdef HAVE_PCM_SYMS
   global:
 
     @SYMBOL_PREFIX@snd_pcm_hw_params_get_access;
@@ -42,6 +43,7 @@ ALSA_0.9.0rc4 {
     @SYMBOL_PREFIX@snd_pcm_hw_params_get_rate_max;
     @SYMBOL_PREFIX@snd_pcm_hw_params_set_rate_near;
     @SYMBOL_PREFIX@snd_pcm_hw_params_set_rate_first;
+
     @SYMBOL_PREFIX@snd_pcm_hw_params_set_rate_last;
 
     @SYMBOL_PREFIX@snd_pcm_hw_params_get_period_time;
@@ -85,22 +87,29 @@ ALSA_0.9.0rc4 {
     @SYMBOL_PREFIX@snd_pcm_hw_params_set_tick_time_near;
     @SYMBOL_PREFIX@snd_pcm_hw_params_set_tick_time_first;
     @SYMBOL_PREFIX@snd_pcm_hw_params_set_tick_time_last;
+#endif
 
 } ALSA_0.9;
 
 ALSA_0.9.0rc8 {
+#ifdef HAVE_PCM_SYMS
   global:
 
     @SYMBOL_PREFIX@snd_pcm_forward;
     @SYMBOL_PREFIX@snd_pcm_status_get_trigger_htstamp;
     @SYMBOL_PREFIX@snd_pcm_status_get_htstamp;
+#endif
 
 } ALSA_0.9.0rc4;
 
 ALSA_0.9.0 {
+#if defined HAVE_PCM_SYMS || defined HAVE_TIMER_SYMS
   global:
 
+#if defined HAVE_PCM_SYMS
     @SYMBOL_PREFIX@snd_pcm_type_name;
+#endif
+#ifdef HAVE_TIMER_SYMS
     @SYMBOL_PREFIX@snd_timer_query_info;
     @SYMBOL_PREFIX@snd_timer_query_params;
     @SYMBOL_PREFIX@snd_timer_query_status;
@@ -108,6 +117,8 @@ ALSA_0.9.0 {
     @SYMBOL_PREFIX@snd_timer_params_get_exclusive;
     @SYMBOL_PREFIX@snd_timer_params_set_filter;
     @SYMBOL_PREFIX@snd_timer_params_get_filter;
+#endif
+#endif
 } ALSA_0.9.0rc8;
 
 ALSA_0.9.3 {
@@ -118,15 +129,9 @@ ALSA_0.9.3 {
 } ALSA_0.9.0;
 
 ALSA_0.9.5 {
-  global:
-
-    @SYMBOL_PREFIX@alsa_lisp;
 } ALSA_0.9.3;
 
 ALSA_0.9.7 {
-  global:
-
-    @SYMBOL_PREFIX@alsa_lisp_*;
 } ALSA_0.9.5;
 
 ALSA_1.1.6 {
@@ -140,3 +145,92 @@ ALSA_1.2.6 {
 
     @SYMBOL_PREFIX@_snd_safe_strto*;
 } ALSA_1.1.6;
+
+ALSA_1.2.9 {
+#ifdef HAVE_PCM_SYMS
+  global:
+
+    @SYMBOL_PREFIX@snd_pcm_hw_params_is_perfect_drain;
+    @SYMBOL_PREFIX@snd_pcm_hw_params_set_drain_silence;
+    @SYMBOL_PREFIX@snd_pcm_hw_params_get_drain_silence;
+#endif
+} ALSA_1.2.6;
+
+ALSA_1.2.10 {
+  global:
+
+#ifdef HAVE_RAWMIDI_SYMS
+    @SYMBOL_PREFIX@snd_ump_*;
+#endif
+    @SYMBOL_PREFIX@snd_ctl_ump_next_device;
+    @SYMBOL_PREFIX@snd_ctl_ump_endpoint_info;
+    @SYMBOL_PREFIX@snd_ctl_ump_block_info;
+#ifdef HAVE_SEQ_SYMS
+    @SYMBOL_PREFIX@snd_seq_ump_*;
+    @SYMBOL_PREFIX@snd_seq_client_info_get_midi_version;
+    @SYMBOL_PREFIX@snd_seq_client_info_get_ump_group_enabled;
+    @SYMBOL_PREFIX@snd_seq_client_info_get_ump_groupless_enabled;
+    @SYMBOL_PREFIX@snd_seq_client_info_get_ump_conversion;
+    @SYMBOL_PREFIX@snd_seq_client_info_set_midi_version;
+    @SYMBOL_PREFIX@snd_seq_client_info_set_ump_group_enabled;
+    @SYMBOL_PREFIX@snd_seq_client_info_set_ump_groupless_enabled;
+    @SYMBOL_PREFIX@snd_seq_client_info_set_ump_conversion;
+    @SYMBOL_PREFIX@snd_seq_get_ump_endpoint_info;
+    @SYMBOL_PREFIX@snd_seq_get_ump_block_info;
+    @SYMBOL_PREFIX@snd_seq_set_ump_endpoint_info;
+    @SYMBOL_PREFIX@snd_seq_set_ump_block_info;
+    @SYMBOL_PREFIX@snd_seq_port_info_get_direction;
+    @SYMBOL_PREFIX@snd_seq_port_info_get_ump_group;
+    @SYMBOL_PREFIX@snd_seq_port_info_set_direction;
+    @SYMBOL_PREFIX@snd_seq_port_info_set_ump_group;
+    @SYMBOL_PREFIX@snd_seq_set_client_midi_version;
+    @SYMBOL_PREFIX@snd_seq_set_client_ump_conversion;
+#endif
+} ALSA_1.2.9;
+
+ALSA_1.2.13 {
+#if defined(HAVE_PCM_SYMS) || defined(HAVE_SEQ_SYMS) || defined(HAVE_RAWMIDI_SYMS)
+  global:
+#endif
+
+#ifdef HAVE_PCM_SYMS
+    @SYMBOL_PREFIX@snd_pcm_hw_params_get_sync;
+#endif
+
+#ifdef HAVE_SEQ_SYMS
+    @SYMBOL_PREFIX@snd_seq_create_ump_endpoint;
+    @SYMBOL_PREFIX@snd_seq_create_ump_block;
+    @SYMBOL_PREFIX@snd_seq_queue_tempo_get_tempo_base;
+    @SYMBOL_PREFIX@snd_seq_queue_tempo_set_tempo_base;
+    @SYMBOL_PREFIX@snd_seq_has_queue_tempo_base;
+    @SYMBOL_PREFIX@snd_seq_port_info_get_ump_is_midi1;
+    @SYMBOL_PREFIX@snd_seq_port_info_set_ump_is_midi1;
+#endif
+#ifdef HAVE_RAWMIDI_SYMS
+    @SYMBOL_PREFIX@snd_ump_endpoint_info_clear;
+    @SYMBOL_PREFIX@snd_ump_endpoint_info_set_*;
+    @SYMBOL_PREFIX@snd_ump_block_info_clear;
+    @SYMBOL_PREFIX@snd_ump_block_info_set_*;
+    @SYMBOL_PREFIX@snd_ump_packet_length;
+#endif
+} ALSA_1.2.10;
+
+
+ALSA_1.2.15 {
+  global:
+
+    @SYMBOL_PREFIX@snd_lib_vlog;
+    @SYMBOL_PREFIX@snd_lib_log;
+    @SYMBOL_PREFIX@snd_lib_log_set_handler;
+    @SYMBOL_PREFIX@snd_lib_log_set_local;
+    @SYMBOL_PREFIX@snd_lib_log_priority;
+    @SYMBOL_PREFIX@snd_lib_log_interface;
+    @SYMBOL_PREFIX@snd_lib_log_filter;
+    @SYMBOL_PREFIX@snd_lib_check;
+} ALSA_1.2.13;
+
+ALSA_1.2.17 {
+  global:
+
+    @SYMBOL_PREFIX@snd_config_get_llong;
+} ALSA_1.2.15;

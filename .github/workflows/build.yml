@@ -11,9 +11,9 @@ jobs:
     - name: Prepare environment
       run: |
         dnf -y upgrade
-        dnf -y install @development-tools libtool bzip2
+        dnf -y install @development-tools libtool bzip2 awk
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         fetch-depth: 0
     - name: Safe git directory
@@ -64,7 +64,7 @@ jobs:
         cd alsa-lib-$(cat version)
         make install
     - name: Archive package
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: alsa-lib-test-package
         path: artifacts/
@@ -75,7 +75,7 @@ jobs:
       image: ubuntu:latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Prepare environment
       run: |
         export DEBIAN_FRONTEND=noninteractive

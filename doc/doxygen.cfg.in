@@ -16,7 +16,10 @@ INPUT            = @top_srcdir@/doc/index.doxygen \
 		   @top_srcdir@/include/conf.h \
 		   @top_srcdir@/include/control.h \
 		   @top_srcdir@/include/pcm.h \
+		   @top_srcdir@/include/pcm_plugin.h \
 		   @top_srcdir@/include/rawmidi.h \
+		   @top_srcdir@/include/ump.h \
+		   @top_srcdir@/include/ump_msg.h \
 		   @top_srcdir@/include/timer.h \
 		   @top_srcdir@/include/hwdep.h \
 		   @top_srcdir@/include/seq.h \
@@ -36,18 +39,21 @@ INPUT            = @top_srcdir@/doc/index.doxygen \
 		   @top_srcdir@/src/input.c \
 		   @top_srcdir@/src/output.c \
 		   @top_srcdir@/src/conf.c \
+		   @top_srcdir@/src/confeval.c \
 		   @top_srcdir@/src/confmisc.c \
 		   @top_srcdir@/src/names.c \
 		   @top_srcdir@/src/shmarea.c \
 		   @top_srcdir@/src/userfile.c \
 		   @top_srcdir@/src/control/cards.c \
 		   @top_srcdir@/src/control/control.c \
+		   @top_srcdir@/src/control/control_ext.c \
 		   @top_srcdir@/src/control/control_plugin.c \
 		   @top_srcdir@/src/control/control_hw.c \
 		   @top_srcdir@/src/control/control_remap.c \
 		   @top_srcdir@/src/control/control_shm.c \
 		   @top_srcdir@/src/control/ctlparse.c \
 		   @top_srcdir@/src/control/hcontrol.c \
+		   @top_srcdir@/src/control/namehint.c \
 		   @top_srcdir@/src/control/setup.c \
 		   @top_srcdir@/src/control/tlv.c \
 		   @top_srcdir@/src/mixer \
@@ -109,8 +115,9 @@ EXCLUDE		 = @top_srcdir@/src/control/control_local.h \
 		   @top_srcdir@/src/topology/tplg_local.h
 RECURSIVE	 = YES
 FILE_PATTERNS    = *.c *.h
+INCLUDE_PATH     = @top_builddir@/include
 EXAMPLE_PATH     = @top_srcdir@/test
-IMAGE_PATH	 = pictures
+IMAGE_PATH	 = @top_srcdir@/doc/pictures
 QUIET            = YES
 
 EXTRACT_ALL	 = NO
@@ -121,17 +128,16 @@ INHERIT_DOCS	 = YES
 ENABLED_SECTIONS = ""
 MACRO_EXPANSION  = YES
 EXPAND_ONLY_PREDEF = YES
-PREDEFINED	 = DOXYGEN PIC "DOC_HIDDEN" \
+PREDEFINED	 = DOXYGEN PIC "DOC_HIDDEN" "ALSA_LIBRARY_BUILD" \
 		   "ATTRIBUTE_UNUSED=" \
 		   ALSA_PCM_NEW_HW_PARAMS_API \
 		   _POSIX_C_SOURCE \
 		   "use_default_symbol_version(x,y,z)=" \
-		   "link_warning(x,y)="
+		   "link_warning(x,y)=" \
+		   __attribute__((x))=
 
 OPTIMIZE_OUTPUT_FOR_C = YES	# doxygen 1.2.6 option
 TYPEDEF_HIDES_STRUCT = YES	# needed in doxygen >= 1.5.4
 
 #INPUT_FILTER	 = inputfilter
 #FILTER_SOURCE_FILES = YES
-
-HTML_TIMESTAMP = NO

@@ -81,10 +81,10 @@ pcm.rate44100Hz {
 \endcode
 
 */
-  
-#include <limits.h>
+
 #include "pcm_local.h"
 #include "pcm_plugin.h"
+#include <limits.h>
 
 #ifndef DOC_HIDDEN
 
@@ -197,8 +197,8 @@ snd_pcm_sframes_t snd_pcm_plugin_rewind(snd_pcm_t *pcm, snd_pcm_uframes_t frames
 		frames = n;
 	if (frames == 0)
 		return 0;
-	
-        sframes = frames;
+
+	sframes = frames;
 	sframes = snd_pcm_rewind(plugin->gen.slave, sframes);
 	if (sframes < 0)
 		return sframes;
@@ -221,8 +221,8 @@ snd_pcm_sframes_t snd_pcm_plugin_forward(snd_pcm_t *pcm, snd_pcm_uframes_t frame
 		frames = n;
 	if (frames == 0)
 		return 0;
-	
-        sframes = frames;
+
+	sframes = frames;
 	sframes = INTERNAL(snd_pcm_forward)(plugin->gen.slave, sframes);
 	if (sframes < 0)
 		return sframes;
@@ -238,15 +238,14 @@ static snd_pcm_sframes_t snd_pcm_plugin_write_areas(snd_pcm_t *pcm,
 	snd_pcm_plugin_t *plugin = pcm->private_data;
 	snd_pcm_t *slave = plugin->gen.slave;
 	snd_pcm_uframes_t xfer = 0;
-	snd_pcm_sframes_t result;
-	int err;
+	snd_pcm_sframes_t result, err;
 
 	while (size > 0) {
 		snd_pcm_uframes_t frames = size;
 		const snd_pcm_channel_area_t *slave_areas;
 		snd_pcm_uframes_t slave_offset;
 		snd_pcm_uframes_t slave_frames = ULONG_MAX;
-		
+
 		result = snd_pcm_mmap_begin(slave, &slave_areas, &slave_offset, &slave_frames);
 		if (result < 0) {
 			err = result;
@@ -257,8 +256,9 @@ static snd_pcm_sframes_t snd_pcm_plugin_write_areas(snd_pcm_t *pcm,
 		frames = plugin->write(pcm, areas, offset, frames,
 				       slave_areas, slave_offset, &slave_frames);
 		if (CHECK_SANITY(slave_frames > snd_pcm_mmap_playback_avail(slave))) {
-			SNDMSG("write overflow %ld > %ld", slave_frames,
-			       snd_pcm_mmap_playback_avail(slave));
+			snd_check(PCM, "write overflow %ld > %ld", slave_frames,
+				       snd_pcm_mmap_playback_avail(slave));
+
 			err = -EPIPE;
 			goto error;
 		}
@@ -295,44 +295,36 @@ static snd_pcm_sframes_t snd_pcm_plugin_read_areas(snd_pcm_t *pcm,
 	snd_pcm_plugin_t *plugin = pcm->private_data;
 	snd_pcm_t *slave = plugin->gen.slave;
 	snd_pcm_uframes_t xfer = 0;
-	snd_pcm_sframes_t result;
-	int err;
-	
+	snd_pcm_sframes_t err;
+
 	while (size > 0) {
 		snd_pcm_uframes_t frames = size;
 		const snd_pcm_channel_area_t *slave_areas;
 		snd_pcm_uframes_t slave_offset;
 		snd_pcm_uframes_t slave_frames = ULONG_MAX;
-		
-		result = snd_pcm_mmap_begin(slave, &slave_areas, &slave_offset, &slave_frames);
-		if (result < 0) {
-			err = result;
+
+		err = snd_pcm_mmap_begin(slave, &slave_areas, &slave_offset, &slave_frames);
+		if (err < 0)
 			goto error;
-		}
 		if (slave_frames == 0)
 			break;
 		frames = (plugin->read)(pcm, areas, offset, frames,
 				      slave_areas, slave_offset, &slave_frames);
 		if (CHECK_SANITY(slave_frames > snd_pcm_mmap_capture_avail(slave))) {
-			SNDMSG("read overflow %ld > %ld", slave_frames,
-			       snd_pcm_mmap_playback_avail(slave));
+			snd_check(PCM, "read overflow %ld > %ld", slave_frames,
+				       snd_pcm_mmap_playback_avail(slave));
+
 			err = -EPIPE;
 			goto error;
 		}
-		result = snd_pcm_mmap_commit(slave, slave_offset, slave_frames);
-		if (result > 0 && (snd_pcm_uframes_t)result != slave_frames) {
-			snd_pcm_sframes_t res;
-			
-			res = plugin->undo_read(slave, areas, offset, frames, slave_frames - result);
-			if (res < 0) {
-				err = res;
-				goto error;
-			}
-			frames -= res;
-		}
-		if (result <= 0) {
-			err = result;
+		err = snd_pcm_mmap_commit(slave, slave_offset, slave_frames);
+		if (err <= 0)
 			goto error;
+		if ((snd_pcm_uframes_t)err != slave_frames) {
+			err = plugin->undo_read(slave, areas, offset, frames, slave_frames - err);
+			if (err < 0)
+				goto error;
+			frames -= err;
 		}
 		snd_pcm_mmap_appl_forward(pcm, frames);
 		offset += frames;
@@ -351,7 +343,7 @@ snd_pcm_plugin_writei(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size
 {
 	snd_pcm_channel_area_t areas[pcm->channels];
 	snd_pcm_areas_from_buf(pcm, areas, (void*)buffer);
-	return snd_pcm_write_areas(pcm, areas, 0, size, 
+	return snd_pcm_write_areas(pcm, areas, 0, size,
 				   snd_pcm_plugin_write_areas);
 }
 
@@ -392,8 +384,7 @@ snd_pcm_plugin_mmap_commit(snd_pcm_t *pcm,
 	const snd_pcm_channel_area_t *areas;
 	snd_pcm_uframes_t appl_offset;
 	snd_pcm_sframes_t slave_size;
-	snd_pcm_sframes_t xfer;
-	int err;
+	snd_pcm_sframes_t xfer, err;
 
 	if (pcm->stream == SND_PCM_STREAM_CAPTURE) {
 		snd_pcm_mmap_appl_forward(pcm, size);
@@ -413,29 +404,21 @@ snd_pcm_plugin_mmap_commit(snd_pcm_t *pcm,
 		snd_pcm_uframes_t slave_frames = ULONG_MAX;
 		snd_pcm_sframes_t result;
 
-		result = snd_pcm_mmap_begin(slave, &slave_areas, &slave_offset, &slave_frames);
-		if (result < 0) {
-			err = result;
+		err = snd_pcm_mmap_begin(slave, &slave_areas, &slave_offset, &slave_frames);
+		if (err < 0)
 			goto error;
-		}
 		if (frames > cont)
 			frames = cont;
 		frames = plugin->write(pcm, areas, appl_offset, frames,
 				       slave_areas, slave_offset, &slave_frames);
-		result = snd_pcm_mmap_commit(slave, slave_offset, slave_frames);
-		if (result > 0 && (snd_pcm_uframes_t)result != slave_frames) {
-			snd_pcm_sframes_t res;
-			
-			res = plugin->undo_write(pcm, slave_areas, slave_offset + result, slave_frames, slave_frames - result);
-			if (res < 0) {
-				err = res;
-				goto error;
-			}
-			frames -= res;
-		}
-		if (result <= 0) {
-			err = result;
+		err = result = snd_pcm_mmap_commit(slave, slave_offset, slave_frames);
+		if (err <= 0)
 			goto error;
+		if ((snd_pcm_uframes_t)result != slave_frames) {
+			err = plugin->undo_write(pcm, slave_areas, slave_offset + result, slave_frames, slave_frames - result);
+			if (err < 0)
+				goto error;
+			frames -= err;
 		}
 		snd_pcm_mmap_appl_forward(pcm, frames);
 		if (frames == cont)
@@ -447,7 +430,7 @@ snd_pcm_plugin_mmap_commit(snd_pcm_t *pcm,
 		xfer += frames;
 	}
 	if (CHECK_SANITY(size)) {
-		SNDMSG("short commit: %ld", size);
+		snd_check(PCM, "short commit: %ld", size);
 		return -EPIPE;
 	}
 	return xfer;
@@ -464,7 +447,7 @@ snd_pcm_plugin_sync_hw_ptr_capture(snd_pcm_t *pcm,
 	snd_pcm_t *slave = plugin->gen.slave;
 	const snd_pcm_channel_area_t *areas;
 	snd_pcm_uframes_t xfer, hw_offset, size;
-	int err;
+	snd_pcm_sframes_t err;
 
 	xfer = snd_pcm_mmap_capture_avail(pcm);
 	size = pcm->buffer_size - xfer;
@@ -476,7 +459,6 @@ snd_pcm_plugin_sync_hw_ptr_capture(snd_pcm_t *pcm,
 		const snd_pcm_channel_area_t *slave_areas;
 		snd_pcm_uframes_t slave_offset;
 		snd_pcm_uframes_t slave_frames = ULONG_MAX;
-		snd_pcm_sframes_t result;
 		/* As mentioned in the ALSA API (see pcm/pcm.c:942):
 		 * The function #snd_pcm_avail_update()
 		 * have to be called before any mmap begin+commit operation.
@@ -485,28 +467,21 @@ snd_pcm_plugin_sync_hw_ptr_capture(snd_pcm_t *pcm,
 		 * there is more data available.
 		 */
 		slave_size = snd_pcm_avail_update(slave);
-		result = snd_pcm_mmap_begin(slave, &slave_areas, &slave_offset, &slave_frames);
-		if (result < 0) {
-			err = result;
+		err = snd_pcm_mmap_begin(slave, &slave_areas, &slave_offset, &slave_frames);
+		if (err < 0)
 			goto error;
-		}
 		if (frames > cont)
 			frames = cont;
 		frames = (plugin->read)(pcm, areas, hw_offset, frames,
 					slave_areas, slave_offset, &slave_frames);
-		result = snd_pcm_mmap_commit(slave, slave_offset, slave_frames);
-		if (result > 0 && (snd_pcm_uframes_t)result != slave_frames) {
-			snd_pcm_sframes_t res;
-			res = plugin->undo_read(slave, areas, hw_offset, frames, slave_frames - result);
-			if (res < 0) {
-				err = res;
-				goto error;
-			}
-			frames -= res;
-		}
-		if (result <= 0) {
-			err = result;
+		err = snd_pcm_mmap_commit(slave, slave_offset, slave_frames);
+		if (err < 0)
 			goto error;
+		if ((snd_pcm_uframes_t)err != slave_frames) {
+			err = plugin->undo_read(slave, areas, hw_offset, frames, slave_frames - err);
+			if (err < 0)
+				goto error;
+			frames -= err;
 		}
 		snd_pcm_mmap_hw_forward(pcm, frames);
 		if (frames == cont)
@@ -530,8 +505,8 @@ static snd_pcm_sframes_t snd_pcm_plugin_sync_hw_ptr(snd_pcm_t *pcm,
 	    pcm->access != SND_PCM_ACCESS_RW_INTERLEAVED &&
 	    pcm->access != SND_PCM_ACCESS_RW_NONINTERLEAVED)
 		return snd_pcm_plugin_sync_hw_ptr_capture(pcm, slave_size);
-        *pcm->hw.ptr = slave_hw_ptr;
-        return slave_size;
+	*pcm->hw.ptr = slave_hw_ptr;
+	return slave_size;
 }
 
 static snd_pcm_sframes_t snd_pcm_plugin_avail_update(snd_pcm_t *pcm)
@@ -597,8 +572,12 @@ int snd_pcm_plugin_may_wait_for_avail_min_conv(
 		 * a) the slave can provide contineous hw_ptr between periods
 		 * b) avail_min does not match one slave_period
 		 */
-		snd_pcm_plugin_t *plugin = pcm->private_data;
-		snd_pcm_t *slave = plugin->gen.slave;
+		snd_pcm_generic_t *generic = pcm->private_data;
+		/*
+		 * do not use snd_pcm_plugin_t pointer here
+		 * this code is used from the generic plugins, too
+		 */
+		snd_pcm_t *slave = generic->slave;
 		snd_pcm_uframes_t needed_slave_avail_min;
 		snd_pcm_sframes_t available;
 

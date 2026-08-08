@@ -25,11 +25,14 @@
  *
  */
 
-#ifndef __ALSA_GLOBAL_H_
-#define __ALSA_GLOBAL_H_
+#if !defined(__ASOUNDLIB_H) && !defined(ALSA_LIBRARY_BUILD)
+/* don't use ALSA_LIBRARY_BUILD define in sources outside alsa-lib */
+#warning "use #include <alsa/asoundlib.h>, <alsa/global.h> should not be used directly"
+#include <alsa/asoundlib.h>
+#endif
 
-/* for timeval and timespec */
-#include <time.h>
+#ifndef __ALSA_GLOBAL_H_
+#define __ALSA_GLOBAL_H_ /**< header include loop protection */
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,6 +52,11 @@ const char *snd_asoundlib_version(void);
 #ifndef ATTRIBUTE_UNUSED
 /** do not print warning (gcc) when function parameter is not used */
 #define ATTRIBUTE_UNUSED __attribute__ ((__unused__))
+#endif
+
+#ifndef __STRING
+/** \brief Return 'x' argument as string */
+#define __STRING(x)     #x
 #endif
 
 #ifdef PIC /* dynamic build */
@@ -82,16 +90,11 @@ extern struct snd_dlsym_link *snd_dlsym_start;
   void __SND_DLSYM_VERSION(snd_dlsym_constructor_, name, version) (void) __attribute__ ((constructor)); \
   void __SND_DLSYM_VERSION(snd_dlsym_constructor_, name, version) (void) { \
     __SND_DLSYM_VERSION(snd_dlsym_, name, version).next = snd_dlsym_start; \
-    __SND_DLSYM_VERSION(snd_dlsym_, name, version).dlsym_name = # name; \
+    __SND_DLSYM_VERSION(snd_dlsym_, name, version).dlsym_name = __STRING(name); \
     __SND_DLSYM_VERSION(snd_dlsym_, name, version).dlsym_ptr = (void *)&name; \
     snd_dlsym_start = &__SND_DLSYM_VERSION(snd_dlsym_, name, version); \
   }
 
-#endif
-
-#ifndef __STRING
-/** \brief Return 'x' argument as string */
-#define __STRING(x)     #x
 #endif
 
 /** \brief Returns the version of a dynamic symbol as a string. */
@@ -121,7 +124,7 @@ typedef struct _snd_async_handler snd_async_handler_t;
  */
 typedef void (*snd_async_callback_t)(snd_async_handler_t *handler);
 
-int snd_async_add_handler(snd_async_handler_t **handler, int fd, 
+int snd_async_add_handler(snd_async_handler_t **handler, int fd,
 			  snd_async_callback_t callback, void *private_data);
 int snd_async_del_handler(snd_async_handler_t *handler);
 int snd_async_handler_get_fd(snd_async_handler_t *handler);

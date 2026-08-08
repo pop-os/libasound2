@@ -25,15 +25,20 @@
  *
  */
 
+#if !defined(__ASOUNDLIB_H) && !defined(ALSA_LIBRARY_BUILD)
+/* don't use ALSA_LIBRARY_BUILD define in sources outside alsa-lib */
+#include <alsa/asoundlib.h>
+#endif
+
 #ifndef __ALSA_CONF_H
-#define __ALSA_CONF_H
+#define __ALSA_CONF_H /**< header include loop protection */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
- *  \defgroup Config Configuration Interface
+ *  \defgroup Configuration Configuration Interface
  *  The configuration functions and types allow you to read, enumerate,
  *  modify and write the contents of ALSA configuration files.
  *  \{
@@ -47,15 +52,15 @@ extern "C" {
 /** \brief Configuration node type. */
 typedef enum _snd_config_type {
 	/** Integer number. */
-        SND_CONFIG_TYPE_INTEGER,
+	SND_CONFIG_TYPE_INTEGER,
 	/** 64-bit integer number. */
-        SND_CONFIG_TYPE_INTEGER64,
+	SND_CONFIG_TYPE_INTEGER64,
 	/** Real number. */
-        SND_CONFIG_TYPE_REAL,
+	SND_CONFIG_TYPE_REAL,
 	/** Character string. */
-        SND_CONFIG_TYPE_STRING,
-        /** Pointer (runtime only, cannot be saved). */
-        SND_CONFIG_TYPE_POINTER,
+	SND_CONFIG_TYPE_STRING,
+	/** Pointer (runtime only, cannot be saved). */
+	SND_CONFIG_TYPE_POINTER,
 	/** Compound node. */
 	SND_CONFIG_TYPE_COMPOUND = 1024
 } snd_config_type_t;
@@ -103,12 +108,22 @@ void snd_config_unref(snd_config_t *top);
 
 int snd_config_search(snd_config_t *config, const char *key,
 		      snd_config_t **result);
-int snd_config_searchv(snd_config_t *config, 
+int snd_config_searchv(snd_config_t *config,
 		       snd_config_t **result, ...);
 int snd_config_search_definition(snd_config_t *config,
 				 const char *base, const char *key,
 				 snd_config_t **result);
 
+/**
+ * \brief custom expansion callback
+ * \param[out] dst The function puts the handle to the new configuration
+ *                 node at the address specified by \a dst.
+ * \param[in] s string the string to be expanded
+ * \param[in] private_data Handle to the \c private_data node.
+ * \return A non-negative value if successful, otherwise a negative error code.
+ *
+ * Use a function of this type to define a custom expansion
+ */
 typedef int (*snd_config_expand_fcn_t)(snd_config_t **dst, const char *s, void *private_data);
 
 int snd_config_expand_custom(snd_config_t *config, snd_config_t *root,
@@ -166,6 +181,7 @@ int snd_config_get_integer(const snd_config_t *config, long *value);
 int snd_config_get_integer64(const snd_config_t *config, long long *value);
 int snd_config_get_real(const snd_config_t *config, double *value);
 int snd_config_get_ireal(const snd_config_t *config, double *value);
+int snd_config_get_llong(const snd_config_t *config, long long *value, int base);
 int snd_config_get_string(const snd_config_t *config, const char **value);
 int snd_config_get_ascii(const snd_config_t *config, char **value);
 int snd_config_get_pointer(const snd_config_t *config, const void **value);

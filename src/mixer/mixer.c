@@ -39,13 +39,13 @@ This is an abstraction layer over the hcontrol layer.
 
 */
 
+#include "mixer_local.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include "mixer_local.h"
 
 #ifndef DOC_HIDDEN
 typedef struct _snd_mixer_slave {
@@ -482,7 +482,6 @@ int snd_mixer_elem_remove(snd_mixer_elem_t *elem)
 /**
  * \brief Free a mixer element
  * \param elem Mixer element
- * \return 0 on success otherwise a negative error code
  *
  * For use by mixer element class specific code.
  */
@@ -753,7 +752,7 @@ int snd_mixer_poll_descriptors_revents(snd_mixer_t *mixer, struct pollfd *pfds, 
 {
 	unsigned int idx;
 	unsigned short res;
-        assert(mixer && pfds && revents);
+	assert(mixer && pfds && revents);
 	if (nfds == 0)
 		return -EINVAL;
 	res = 0;
@@ -782,7 +781,7 @@ int snd_mixer_wait(snd_mixer_t *mixer, int timeout)
 		pfds = alloca(count * sizeof(*pfds));
 		if (!pfds)
 			return -ENOMEM;
-		err = snd_mixer_poll_descriptors(mixer, pfds, 
+		err = snd_mixer_poll_descriptors(mixer, pfds,
 						 (unsigned int) count);
 		assert(err == count);
 	}

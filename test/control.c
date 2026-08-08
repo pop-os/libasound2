@@ -1,3 +1,4 @@
+#include "config.h"
 #include <stdio.h>
 #include <string.h>
 #include "../include/asoundlib.h"
@@ -100,7 +101,7 @@ int main(void)
 		}
 		snd_ctl_close(handle);
 	}
-	
+
 	snd_config_update_free_global();
 	return 0;
 }

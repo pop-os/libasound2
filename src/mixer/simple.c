@@ -29,6 +29,8 @@
  *
  */
 
+#include "mixer_local.h"
+#include "mixer_simple.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -36,9 +38,6 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <math.h>
-#include "config.h"
-#include "mixer_local.h"
-#include "mixer_simple.h"
 
 /**
  * \brief Register mixer simple element class
@@ -123,7 +122,7 @@ int snd_mixer_selem_compare(const snd_mixer_elem_t *c1, const snd_mixer_elem_t *
 	return s1->id->index - s2->id->index;
 }
 #endif
-	
+
 /**
  * \brief Find a mixer simple element
  * \param mixer Mixer handle
@@ -305,7 +304,7 @@ int snd_mixer_selem_get_playback_dB_range(snd_mixer_elem_t *elem,
  * \param min minimum volume value
  * \param max maximum volume value
  */
-int snd_mixer_selem_set_playback_volume_range(snd_mixer_elem_t *elem, 
+int snd_mixer_selem_set_playback_volume_range(snd_mixer_elem_t *elem,
 					      long min, long max)
 {
 	CHECK_BASIC(elem);
@@ -611,7 +610,7 @@ int snd_mixer_selem_get_capture_dB_range(snd_mixer_elem_t *elem,
  * \param min minimum volume value
  * \param max maximum volume value
  */
-int snd_mixer_selem_set_capture_volume_range(snd_mixer_elem_t *elem, 
+int snd_mixer_selem_set_capture_volume_range(snd_mixer_elem_t *elem,
 					     long min, long max)
 {
 	CHECK_BASIC(elem);

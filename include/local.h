@@ -30,6 +30,9 @@
 #include <string.h>
 #include <fcntl.h>
 #include <assert.h>
+#include <stdint.h>
+/* for timeval and timespec */
+#include <time.h>
 #ifdef HAVE_ENDIAN_H
 #include <endian.h>
 #elif defined(HAVE_SYS_ENDIAN_H)
@@ -69,9 +72,11 @@
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define SND_LITTLE_ENDIAN
 #define SNDRV_LITTLE_ENDIAN
+#define SNDRV_LITTLE_ENDIAN_BITFIELD
 #elif __BYTE_ORDER == __BIG_ENDIAN
 #define SND_BIG_ENDIAN
 #define SNDRV_BIG_ENDIAN
+#define SNDRV_BIG_ENDIAN_BITFIELD
 #else
 #error "Unsupported endian..."
 #endif
@@ -180,10 +185,12 @@
 #include "pcm.h"
 #include "pcm_plugin.h"
 #include "rawmidi.h"
+#include "ump.h"
 #include "timer.h"
 #include "hwdep.h"
 #include "control.h"
 #include "mixer.h"
+#include "ump_msg.h"
 #include "seq_event.h"
 #include "seq.h"
 
@@ -193,7 +200,9 @@
 #define snd_seq_real_time	sndrv_seq_real_time
 #define snd_seq_timestamp	sndrv_seq_timestamp
 #define snd_seq_event_type_t	sndrv_seq_event_type_t
+#define snd_seq_event_data	sndrv_seq_event_data
 #define snd_seq_event		sndrv_seq_event
+#define snd_seq_ump_event	sndrv_seq_ump_event
 #define snd_seq_connect		sndrv_seq_connect
 #define snd_seq_ev_note		sndrv_seq_ev_note
 #define snd_seq_ev_ctrl		sndrv_seq_ev_ctrl
@@ -203,6 +212,7 @@
 #define snd_seq_result		sndrv_seq_result
 #define snd_seq_queue_skew	sndrv_seq_queue_skew
 #define snd_seq_ev_queue_control	sndrv_seq_ev_queue_control
+#define snd_seq_ev_ump_notify	sndrv_seq_ev_ump_notify
 #define snd_seq_client_t	sndrv_seq_client_t
 #define snd_seq_client_type_t	sndrv_seq_client_type_t
 
@@ -257,19 +267,15 @@ int _snd_safe_strtod(const char *str, double *val);
 int snd_send_fd(int sock, void *data, size_t len, int fd);
 int snd_receive_fd(int sock, void *data, size_t len, int *fd);
 size_t snd_strlcpy(char *dst, const char *src, size_t size);
+size_t snd_strlcat(char *dst, const char *src, size_t size);
 
 /*
  * error messages
  */
 #ifndef NDEBUG
 #define CHECK_SANITY(x) x
-extern snd_lib_error_handler_t snd_err_msg;
-#define SNDMSG(args...) snd_err_msg(__FILE__, __LINE__, __func__, 0, ##args)
-#define SYSMSG(args...) snd_err_msg(__FILE__, __LINE__, __func__, errno, ##args)
 #else
 #define CHECK_SANITY(x) 0 /* not evaluated */
-#define SNDMSG(args...) /* nop */
-#define SYSMSG(args...) /* nop */
 #endif
 
 /*
@@ -375,7 +381,7 @@ int snd_config_check_hop(snd_config_t *conf);
 #define SND_CONF_MAX_HOPS	64
 
 int snd_config_search_alias_hooks(snd_config_t *config,
-                                  const char *base, const char *key,
+				  const char *base, const char *key,
 				  snd_config_t **result);
 
 int _snd_conf_generic_id(const char *id);

@@ -27,6 +27,8 @@
  *
  */
 
+#include "mixer_local.h"
+#include "mixer_simple.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -35,8 +37,6 @@
 #include <sys/ioctl.h>
 #include <math.h>
 #include <dlfcn.h>
-#include "mixer_local.h"
-#include "mixer_simple.h"
 
 #ifndef DOC_HIDDEN
 
@@ -82,20 +82,20 @@ static int try_open(snd_mixer_class_t *class, const char *lib)
 	strcat(xlib, lib);
 	h = INTERNAL(snd_dlopen)(xlib, RTLD_NOW, errbuf, sizeof(errbuf));
 	if (h == NULL) {
-		SNDERR("Unable to open library '%s' (%s)", xlib, errbuf);
+		snd_error(MIXER, "Unable to open library '%s' (%s)", xlib, errbuf);
 		free(xlib);
 		return -ENXIO;
 	}
 	priv->dlhandle = h;
 	event_func = snd_dlsym(h, "alsa_mixer_simple_event", NULL);
 	if (event_func == NULL) {
-		SNDERR("Symbol 'alsa_mixer_simple_event' was not found in '%s'", xlib);
+		snd_error(MIXER, "Symbol 'alsa_mixer_simple_event' was not found in '%s'", xlib);
 		err = -ENXIO;
 	}
 	if (err == 0) {
 		init_func = snd_dlsym(h, "alsa_mixer_simple_init", NULL);
 		if (init_func == NULL) {
-			SNDERR("Symbol 'alsa_mixer_simple_init' was not found in '%s'", xlib);
+			snd_error(MIXER, "Symbol 'alsa_mixer_simple_init' was not found in '%s'", xlib);
 			err = -ENXIO;
 		}
 	}
@@ -129,20 +129,20 @@ static int try_open_full(snd_mixer_class_t *class, snd_mixer_t *mixer,
 	/* note python modules requires RTLD_GLOBAL */
 	h = INTERNAL(snd_dlopen)(xlib, RTLD_NOW|RTLD_GLOBAL, errbuf, sizeof(errbuf));
 	if (h == NULL) {
-		SNDERR("Unable to open library '%s'", xlib);
+		snd_error(MIXER, "Unable to open library '%s'", xlib);
 		free(xlib);
 		return -ENXIO;
 	}
 	priv->dlhandle = h;
 	event_func = snd_dlsym(h, "alsa_mixer_simple_event", NULL);
 	if (event_func == NULL) {
-		SNDERR("Symbol 'alsa_mixer_simple_event' was not found in '%s'", xlib);
+		snd_error(MIXER, "Symbol 'alsa_mixer_simple_event' was not found in '%s'", xlib);
 		err = -ENXIO;
 	}
 	if (err == 0) {
 		init_func = snd_dlsym(h, "alsa_mixer_simple_finit", NULL);
 		if (init_func == NULL) {
-			SNDERR("Symbol 'alsa_mixer_simple_finit' was not found in '%s'", xlib);
+			snd_error(MIXER, "Symbol 'alsa_mixer_simple_finit' was not found in '%s'", xlib);
 			err = -ENXIO;
 		}
 	}
@@ -243,7 +243,7 @@ static int find_module(snd_mixer_class_t *class, snd_config_t *top)
 static void private_free(snd_mixer_class_t *class)
 {
 	class_priv_t *priv = snd_mixer_class_get_private(class);
-	
+
 	if (priv->private_free)
 		priv->private_free(class);
 	if (priv->dlhandle)
@@ -305,38 +305,36 @@ int snd_mixer_simple_basic_register(snd_mixer_t *mixer,
 		file = s;
 	}
 	err = snd_config_top(&top);
-	if (err >= 0) {
-		err = snd_input_stdio_open(&input, file, "r");
-		if (err < 0) {
-			SNDERR("unable to open simple mixer configuration file '%s'", file);
-			goto __error;
-		}
-		err = snd_config_load(top, input);
-		snd_input_close(input);
-		if (err < 0) {
-			SNDERR("%s may be old or corrupted: consider to remove or fix it", file);
-			goto __error;
-		}
-		err = find_full(class, mixer, top, priv->device);
-		if (err >= 0)
-			goto __full;
+	if (err < 0)
+		goto __error;
+	err = snd_input_stdio_open(&input, file, "r");
+	if (err < 0) {
+		snd_error(MIXER, "unable to open simple mixer configuration file '%s'", file);
+		goto __error;
 	}
-	if (err >= 0) {
-		err = snd_ctl_open(&priv->ctl, priv->device, 0);
-		if (err < 0) {
-			SNDERR("unable to open control device '%s': %s", priv->device, snd_strerror(err));
-			goto __error;
-		}
-		err = snd_hctl_open_ctl(&priv->hctl, priv->ctl);
-		if (err < 0)
-			goto __error;
-		err = snd_ctl_card_info_malloc(&priv->info);
-		if (err < 0)
-			goto __error;
-		err = snd_ctl_card_info(priv->ctl, priv->info);
-		if (err < 0)
-			goto __error;
+	err = snd_config_load(top, input);
+	snd_input_close(input);
+	if (err < 0) {
+		snd_error(MIXER, "%s may be old or corrupted: consider to remove or fix it", file);
+		goto __error;
 	}
+	err = find_full(class, mixer, top, priv->device);
+	if (err >= 0)
+		goto __full;
+	err = snd_ctl_open(&priv->ctl, priv->device, 0);
+	if (err < 0) {
+		snd_error(MIXER, "unable to open control device '%s': %s", priv->device, snd_strerror(err));
+		goto __error;
+	}
+	err = snd_hctl_open_ctl(&priv->hctl, priv->ctl);
+	if (err < 0)
+		goto __error;
+	err = snd_ctl_card_info_malloc(&priv->info);
+	if (err < 0)
+		goto __error;
+	err = snd_ctl_card_info(priv->ctl, priv->info);
+	if (err < 0)
+		goto __error;
 	if (err >= 0)
 		err = find_module(class, top);
 	if (err >= 0)
@@ -350,12 +348,11 @@ int snd_mixer_simple_basic_register(snd_mixer_t *mixer,
 	      __error:
 		if (top)
 			snd_config_delete(top);
-	      	if (class)
+		if (class)
 			snd_mixer_class_free(class);
 		return err;
 	}
-	if (top)
-		snd_config_delete(top);
+	snd_config_delete(top);
 	if (classp)
 		*classp = class;
 	return 0;

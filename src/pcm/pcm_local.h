@@ -20,6 +20,9 @@
  *
  */
 
+#ifndef __PCM_LOCAL_H
+#define __PCM_LOCAL_H
+
 #include "config.h"
 
 #include <stdio.h>
@@ -48,12 +51,9 @@
 #include "mask.h"
 
 #define SND_PCM_HW_PARAM_ACCESS SNDRV_PCM_HW_PARAM_ACCESS
-#define SND_PCM_HW_PARAM_FIRST_MASK SNDRV_PCM_HW_PARAM_FIRST_MASK
 #define SND_PCM_HW_PARAM_FORMAT SNDRV_PCM_HW_PARAM_FORMAT
 #define SND_PCM_HW_PARAM_SUBFORMAT SNDRV_PCM_HW_PARAM_SUBFORMAT
-#define SND_PCM_HW_PARAM_LAST_MASK SNDRV_PCM_HW_PARAM_LAST_MASK
 #define SND_PCM_HW_PARAM_SAMPLE_BITS SNDRV_PCM_HW_PARAM_SAMPLE_BITS
-#define SND_PCM_HW_PARAM_FIRST_INTERVAL SNDRV_PCM_HW_PARAM_FIRST_INTERVAL
 #define SND_PCM_HW_PARAM_FRAME_BITS SNDRV_PCM_HW_PARAM_FRAME_BITS
 #define SND_PCM_HW_PARAM_CHANNELS SNDRV_PCM_HW_PARAM_CHANNELS
 #define SND_PCM_HW_PARAM_RATE SNDRV_PCM_HW_PARAM_RATE
@@ -65,7 +65,6 @@
 #define SND_PCM_HW_PARAM_BUFFER_SIZE SNDRV_PCM_HW_PARAM_BUFFER_SIZE
 #define SND_PCM_HW_PARAM_BUFFER_BYTES SNDRV_PCM_HW_PARAM_BUFFER_BYTES
 #define SND_PCM_HW_PARAM_TICK_TIME SNDRV_PCM_HW_PARAM_TICK_TIME
-#define SND_PCM_HW_PARAM_LAST_INTERVAL SNDRV_PCM_HW_PARAM_LAST_INTERVAL
 #define SND_PCM_HW_PARAM_LAST_MASK SNDRV_PCM_HW_PARAM_LAST_MASK
 #define SND_PCM_HW_PARAM_FIRST_MASK SNDRV_PCM_HW_PARAM_FIRST_MASK
 #define SND_PCM_HW_PARAM_LAST_INTERVAL SNDRV_PCM_HW_PARAM_LAST_INTERVAL
@@ -79,6 +78,8 @@
 #define SND_PCM_INFO_DOUBLE SNDRV_PCM_INFO_DOUBLE
 /** device transfers samples in batch */
 #define SND_PCM_INFO_BATCH SNDRV_PCM_INFO_BATCH
+/** device does perfect drain (silencing not required) */
+#define SND_PCM_INFO_PERFECT_DRAIN SNDRV_PCM_INFO_PERFECT_DRAIN
 /** device accepts interleaved samples */
 #define SND_PCM_INFO_INTERLEAVED SNDRV_PCM_INFO_INTERLEAVED
 /** device accepts non-interleaved samples */
@@ -105,6 +106,7 @@
 #define SND_PCM_HW_PARAMS_NORESAMPLE SNDRV_PCM_HW_PARAMS_NORESAMPLE
 #define SND_PCM_HW_PARAMS_EXPORT_BUFFER SNDRV_PCM_HW_PARAMS_EXPORT_BUFFER
 #define SND_PCM_HW_PARAMS_NO_PERIOD_WAKEUP SNDRV_PCM_HW_PARAMS_NO_PERIOD_WAKEUP
+#define SND_PCM_HW_PARAMS_NO_DRAIN_SILENCE SNDRV_PCM_HW_PARAMS_NO_DRAIN_SILENCE
 
 #define SND_PCM_INFO_MONOTONIC	0x80000000
 
@@ -366,6 +368,8 @@ struct _snd_pcm {
 	snd1_pcm_hw_param_get_max
 #define snd_pcm_hw_param_name		\
 	snd1_pcm_hw_param_name
+#define snd_pcm_sw_params_current_no_lock \
+	snd1_pcm_sw_params_current_no_lock
 
 int snd_pcm_new(snd_pcm_t **pcmp, snd_pcm_type_t type, const char *name,
 		snd_pcm_stream_t stream, int mode);
@@ -390,14 +394,16 @@ void snd_pcm_mmap_appl_forward(snd_pcm_t *pcm, snd_pcm_uframes_t frames);
 void snd_pcm_mmap_hw_backward(snd_pcm_t *pcm, snd_pcm_uframes_t frames);
 void snd_pcm_mmap_hw_forward(snd_pcm_t *pcm, snd_pcm_uframes_t frames);
 
+void snd_pcm_sw_params_current_no_lock(snd_pcm_t *pcm, snd_pcm_sw_params_t *params);
+
 snd_pcm_sframes_t snd_pcm_mmap_writei(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size);
 snd_pcm_sframes_t snd_pcm_mmap_readi(snd_pcm_t *pcm, void *buffer, snd_pcm_uframes_t size);
 snd_pcm_sframes_t snd_pcm_mmap_writen(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size);
 snd_pcm_sframes_t snd_pcm_mmap_readn(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size);
 
-typedef snd_pcm_sframes_t (*snd_pcm_xfer_areas_func_t)(snd_pcm_t *pcm, 
+typedef snd_pcm_sframes_t (*snd_pcm_xfer_areas_func_t)(snd_pcm_t *pcm,
 						       const snd_pcm_channel_area_t *areas,
-						       snd_pcm_uframes_t offset, 
+						       snd_pcm_uframes_t offset,
 						       snd_pcm_uframes_t size);
 
 snd_pcm_sframes_t snd_pcm_read_areas(snd_pcm_t *pcm, const snd_pcm_channel_area_t *areas,
@@ -600,13 +606,13 @@ static inline const snd_pcm_channel_area_t *snd_pcm_mmap_areas(snd_pcm_t *pcm)
 
 static inline snd_pcm_uframes_t snd_pcm_mmap_offset(snd_pcm_t *pcm)
 {
-        assert(pcm);
+	assert(pcm);
 	return *pcm->appl.ptr % pcm->buffer_size;
 }
 
 static inline snd_pcm_uframes_t snd_pcm_mmap_hw_offset(snd_pcm_t *pcm)
 {
-        assert(pcm);
+	assert(pcm);
 	return *pcm->hw.ptr % pcm->buffer_size;
 }
 
@@ -1073,7 +1079,7 @@ const snd_config_t *snd_pcm_rate_get_default_converter(snd_config_t *root);
 	 (1U << (SND_PCM_FORMAT_U18_3LE - 32)) | \
 	 (1U << (SND_PCM_FORMAT_S18_3BE - 32)) | \
 	 (1U << (SND_PCM_FORMAT_U18_3BE - 32))) }
-	
+
 
 #define SND_PCM_FMTBIT_FLOAT \
 	{ ((1U << SND_PCM_FORMAT_FLOAT_LE) | \
@@ -1144,7 +1150,7 @@ static inline int snd_pcm_may_wait_for_avail_min(snd_pcm_t *pcm, snd_pcm_uframes
 	if (avail >= pcm->avail_min)
 		return 0;
 	if (pcm->fast_ops->may_wait_for_avail_min)
-		return pcm->fast_ops->may_wait_for_avail_min(pcm, avail);
+		return pcm->fast_ops->may_wait_for_avail_min(pcm->fast_op_arg, avail);
 	return 1;
 }
 
@@ -1220,3 +1226,5 @@ static inline void snd_pcm_unlock(snd_pcm_t *pcm)
 #define snd_pcm_lock(pcm)		do {} while (0)
 #define snd_pcm_unlock(pcm)		do {} while (0)
 #endif /* THREAD_SAFE_API */
+
+#endif /* __PCM_LOCAL_H */

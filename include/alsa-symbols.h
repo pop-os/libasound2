@@ -29,10 +29,17 @@
 #define INTERNAL_CONCAT2_2(Pre, Post) Pre##Post
 #define INTERNAL(Name) INTERNAL_CONCAT2_2(__, Name)
 
+#if HAVE_ATTRIBUTE_SYMVER && __GNUC__ > 10
+#define symbol_version(real, name, version) \
+	extern __typeof (real) real __attribute__((symver (#name "@" #version)))
+#define default_symbol_version(real, name, version) \
+	extern __typeof (real) real __attribute__((symver (#name "@@" #version)))
+#else
 #define symbol_version(real, name, version) \
 	__asm__ (".symver " ASM_NAME(#real) "," ASM_NAME(#name) "@" #version)
 #define default_symbol_version(real, name, version) \
 	__asm__ (".symver " ASM_NAME(#real) "," ASM_NAME(#name) "@@" #version)
+#endif
 
 #ifdef __clang__
 #define EXPORT_SYMBOL __attribute__((visibility("default")))
@@ -49,8 +56,8 @@
 #define use_symbol_version(real, name, version) /* nothing */
 #if defined(__alpha__) || defined(__mips__)
 #define use_default_symbol_version(real, name, version) \
-        __asm__ (".weak " ASM_NAME(#name)); \
-        __asm__ (ASM_NAME(#name) " = " ASM_NAME(#real))
+	__asm__ (".weak " ASM_NAME(#name)); \
+	__asm__ (ASM_NAME(#name) " = " ASM_NAME(#real))
 #else
 #define use_default_symbol_version(real, name, version) \
 	__asm__ (".weak " ASM_NAME(#name)); \
